@@ -2,10 +2,9 @@
 Utility functions for RepoMap.
 """
 
-import os
 import sys
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 from collections import namedtuple
 
 try:
@@ -15,7 +14,10 @@ except ImportError:
     sys.exit(1)
 
 # Tag namedtuple for storing parsed code definitions and references
-Tag = namedtuple("Tag", "rel_fname fname line name kind".split())
+# node_type stores the tree-sitter node type (e.g., "function_definition", "class_definition")
+# parent_name is the name of the parent function/class if this is a nested definition, None otherwise
+# parent_line is the line number where the parent is defined, None if top-level
+Tag = namedtuple("Tag", "rel_fname fname line name kind node_type parent_name parent_line".split())
 
 
 def count_tokens(text: str, model_name: str = "gpt-4") -> int:

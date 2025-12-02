@@ -1,16 +1,12 @@
 import asyncio
-import json
 import os
 import logging
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set
-import dataclasses
+from typing import List, Optional, Dict, Any
 
 from fastmcp import FastMCP, settings
 from repomap_class import RepoMap
 from utils import count_tokens, read_text
-from scm import get_scm_fname
-from importance import filter_important_files
 
 # Helper function from your CLI, useful to have here
 def find_src_files(directory: str) -> List[str]:

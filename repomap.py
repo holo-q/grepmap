@@ -13,9 +13,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-from utils import count_tokens, read_text, Tag
-from scm import get_scm_fname
-from importance import is_important, filter_important_files
+from utils import count_tokens, read_text
 from repomap_class import RepoMap
 
 
@@ -138,7 +136,13 @@ Examples:
         action="store_true",
         help="Exclude files with Page Rank 0 from the map"
     )
-    
+
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable semantic color highlighting (enabled by default)"
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -171,12 +175,48 @@ Examples:
         effective_other_files_unresolved.extend(find_src_files(path_spec_str))
     
     # Convert to absolute paths
-    root_path = Path(args.root).resolve()
-    # chat_files for RepoMap are from --chat-files argument, resolved.
     chat_files = [str(Path(f).resolve()) for f in chat_files_from_args]
-    # other_files for RepoMap are the effective_other_files, resolved after expansion.
     other_files = [str(Path(f).resolve()) for f in effective_other_files_unresolved]
 
+    # Auto-detect root if not explicitly provided and files are from outside current directory
+    # This ensures that when you run "repomap /some/other/path/file.py" it automatically
+    # uses the correct repository root instead of the current directory
+    if args.root == "." and (chat_files or other_files):
+        all_files = chat_files + other_files
+        # Try to find git repository root
+        if all_files:
+            file_paths = [Path(f) for f in all_files]
+            # Start with the first file's parent and walk up looking for .git
+            search_path = file_paths[0].parent
+            git_root = None
+            # Walk up to find .git directory (max 20 levels to avoid infinite loop)
+            for _ in range(20):
+                if (search_path / ".git").exists():
+                    git_root = search_path
+                    break
+                if search_path.parent == search_path:
+                    break  # Reached filesystem root
+                search_path = search_path.parent
+
+            # If we found a git root, use it; otherwise find common ancestor
+            if git_root:
+                root_path = git_root
+            else:
+                # Fall back to finding common ancestor directory
+                common_root = file_paths[0].parent
+                while not all(common_root in p.parents or common_root == p.parent for p in file_paths):
+                    if common_root.parent == common_root:
+                        common_root = Path(".").resolve()
+                        break
+                    common_root = common_root.parent
+                root_path = common_root
+        else:
+            root_path = Path(args.root).resolve()
+    else:
+        root_path = Path(args.root).resolve()
+
+    if args.verbose:
+        print(f"Root path: {root_path}")
     print(f"Chat files: {chat_files}")
     
     # Convert mentioned files to sets
@@ -192,19 +232,20 @@ Examples:
         output_handler_funcs=output_handlers,
         verbose=args.verbose,
         max_context_window=args.max_context_window,
-        exclude_unranked=args.exclude_unranked
+        exclude_unranked=args.exclude_unranked,
+        color=not args.no_color
     )
     
     # Generate the map
     try:
-        map_content = repo_map.get_repo_map(
+        map_content, file_report = repo_map.get_repo_map(
             chat_files=chat_files,
             other_files=other_files,
             mentioned_fnames=mentioned_fnames,
             mentioned_idents=mentioned_idents,
             force_refresh=args.force_refresh
         )
-        
+
         if map_content:
             if args.verbose:
                 tokens = repo_map.token_count(map_content)
