@@ -30,7 +30,7 @@ class FileReport:
 
 
 # Constants
-CACHE_VERSION = 3  # Bumped for Tag format change (added signature, fields for multi-detail rendering)
+CACHE_VERSION = 4  # Bumped for decorator extraction fix (properties now properly detected)
 
 TAGS_CACHE_DIR = f".repomap.tags.cache.v{CACHE_VERSION}"
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError)
@@ -202,23 +202,32 @@ class RepoMap:
         return_type = None
         decorators = []
 
-        for child in func_node.children:
-            # Extract decorators (appear before the function definition)
-            if child.type == 'decorator':
-                # Get the decorator name (skip the @ symbol)
-                for deco_child in child.children:
-                    if deco_child.type == 'identifier':
-                        decorators.append(deco_child.text.decode('utf-8') if deco_child.text else '')
-                        break
-                    elif deco_child.type == 'call':
-                        # Decorator with arguments like @dataclass(frozen=True)
-                        for call_child in deco_child.children:
-                            if call_child.type == 'identifier':
-                                decorators.append(call_child.text.decode('utf-8') if call_child.text else '')
-                                break
+        # Decorators are in a parent decorated_definition node, not children of function_definition
+        # Structure: decorated_definition -> [decorator, decorator, ..., function_definition]
+        parent = func_node.parent
+        if parent and parent.type == 'decorated_definition':
+            for sibling in parent.children:
+                if sibling.type == 'decorator':
+                    # Get the decorator name (skip the @ symbol)
+                    for deco_child in sibling.children:
+                        if deco_child.type == 'identifier':
+                            decorators.append(deco_child.text.decode('utf-8') if deco_child.text else '')
+                            break
+                        elif deco_child.type == 'call':
+                            # Decorator with arguments like @dataclass(frozen=True)
+                            for call_child in deco_child.children:
+                                if call_child.type == 'identifier':
+                                    decorators.append(call_child.text.decode('utf-8') if call_child.text else '')
+                                    break
+                        elif deco_child.type == 'attribute':
+                            # Decorator like @functools.wraps
+                            attr_text = deco_child.text.decode('utf-8') if deco_child.text else ''
+                            decorators.append(attr_text)
+                            break
 
+        for child in func_node.children:
             # Extract parameters
-            elif child.type == 'parameters':
+            if child.type == 'parameters':
                 for param in child.children:
                     if param.type == 'identifier':
                         # Simple parameter without type annotation
@@ -1291,9 +1300,20 @@ class RepoMap:
 
                 # Get fields and methods for this class
                 class_fields = class_tag.fields or ()
-                class_methods = methods_by_class.get(class_tag.name, [])
+                all_class_methods = methods_by_class.get(class_tag.name, [])
 
-                if class_fields or class_methods:
+                # Separate properties from regular methods
+                # A property has 'property' in its signature decorators
+                class_properties = []
+                class_methods = []
+                for m in all_class_methods:
+                    if m.signature and 'property' in m.signature.decorators:
+                        class_properties.append(m)
+                    else:
+                        class_methods.append(m)
+
+                has_content = class_fields or class_properties or class_methods
+                if has_content:
                     line.append(":", style="dim white")
                 console.print(line, no_wrap=True)
 
@@ -1303,6 +1323,14 @@ class RepoMap:
                     field_names = [f.render(detail_level) for f in class_fields]
                     self._render_field_list(
                         console, field_names,
+                        prefix="      ", term_width=term_width, color="bright_cyan"
+                    )
+
+                # Render properties indented under the class
+                if class_properties:
+                    console.print(Text("    props:", style="dim magenta"), no_wrap=True)
+                    self._render_symbol_list(
+                        console, class_properties, detail_level, file_seen,
                         prefix="      ", term_width=term_width, color="bright_cyan"
                     )
 
