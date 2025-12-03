@@ -224,6 +224,19 @@ class TreeRenderer:
                     tag = line_to_tag.get(loi)
                     should_strip_colon = tag and tag.node_type in ('function', 'method', 'class')
 
+                    # Handle multi-line signatures: synthesize complete one-line signature
+                    # Works for C-style languages (Python, JS, Java, C++, Rust, Go, etc.)
+                    if tag and tag.node_type in ('function', 'method') and tag.signature:
+                        # Check if signature is incomplete (unbalanced parens)
+                        open_parens = line_text.count('(')
+                        close_parens = line_text.count(')')
+                        if open_parens > 0 and open_parens > close_parens:
+                            # Multi-line signature detected - synthesize from SignatureInfo
+                            sig_rendered = tag.signature.render(DetailLevel.HIGH)
+                            # Preserve language keyword (def, func, fn, function, etc.)
+                            keyword_match = line_text.split(tag.name)[0].strip()
+                            line_text = f"{keyword_match} {tag.name}{sig_rendered}"
+
                     if tree:
                         # Use tree-sitter for granular token coloring
                         rich_line = self._colorize_line_with_tree_sitter(
