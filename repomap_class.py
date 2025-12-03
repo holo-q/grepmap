@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import List, Dict, Set, Optional, Tuple, Callable
 import shutil
 import sqlite3
-from utils import Tag
+from utils import Tag, DetailLevel, SignatureInfo, FieldInfo, RenderConfig
 from dataclasses import dataclass
 import diskcache
 import networkx as nx
@@ -30,9 +30,9 @@ class FileReport:
 
 
 # Constants
-CACHE_VERSION = 1
+CACHE_VERSION = 3  # Bumped for Tag format change (added signature, fields for multi-detail rendering)
 
-TAGS_CACHE_DIR = os.path.join(os.getcwd(), f".repomap.tags.cache.v{CACHE_VERSION}")
+TAGS_CACHE_DIR = f".repomap.tags.cache.v{CACHE_VERSION}"
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError)
 
 # Tag is imported from utils.py and includes parent scope information
@@ -54,7 +54,8 @@ class RepoMap:
         map_mul_no_files: int = 8,
         refresh: str = "auto",
         exclude_unranked: bool = False,
-        color: bool = True
+        color: bool = True,
+        directory_mode: bool = True
     ):
         """Initialize RepoMap instance."""
         self.map_tokens = map_tokens
@@ -69,7 +70,8 @@ class RepoMap:
         self.refresh = refresh
         self.exclude_unranked = exclude_unranked
         self.color = color
-        
+        self.directory_mode = directory_mode
+
         # Set up output handlers
         if output_handler_funcs is None:
             output_handler_funcs = {
@@ -186,7 +188,194 @@ class RepoMap:
             self.tags_cache_error()
         
         return tags
-    
+
+    def extract_signature_info(self, func_node, code_bytes: bytes) -> Optional[SignatureInfo]:
+        """Extract function signature from tree-sitter function_definition node.
+
+        Parses parameters with type annotations and return type for multi-detail rendering.
+        Used during tag extraction to populate Tag.signature field.
+        """
+        if func_node is None:
+            return None
+
+        parameters = []
+        return_type = None
+        decorators = []
+
+        for child in func_node.children:
+            # Extract decorators (appear before the function definition)
+            if child.type == 'decorator':
+                # Get the decorator name (skip the @ symbol)
+                for deco_child in child.children:
+                    if deco_child.type == 'identifier':
+                        decorators.append(deco_child.text.decode('utf-8') if deco_child.text else '')
+                        break
+                    elif deco_child.type == 'call':
+                        # Decorator with arguments like @dataclass(frozen=True)
+                        for call_child in deco_child.children:
+                            if call_child.type == 'identifier':
+                                decorators.append(call_child.text.decode('utf-8') if call_child.text else '')
+                                break
+
+            # Extract parameters
+            elif child.type == 'parameters':
+                for param in child.children:
+                    if param.type == 'identifier':
+                        # Simple parameter without type annotation
+                        param_name = param.text.decode('utf-8') if param.text else ''
+                        if param_name:
+                            parameters.append((param_name, None))
+
+                    elif param.type == 'typed_parameter':
+                        # Parameter with type annotation: name: Type
+                        param_name = None
+                        param_type = None
+                        for typed_child in param.children:
+                            if typed_child.type == 'identifier':
+                                param_name = typed_child.text.decode('utf-8') if typed_child.text else ''
+                            elif typed_child.type == 'type':
+                                param_type = typed_child.text.decode('utf-8') if typed_child.text else ''
+                        if param_name:
+                            parameters.append((param_name, param_type))
+
+                    elif param.type == 'default_parameter':
+                        # Parameter with default value: name=value
+                        for default_child in param.children:
+                            if default_child.type == 'identifier':
+                                param_name = default_child.text.decode('utf-8') if default_child.text else ''
+                                parameters.append((param_name, None))
+                                break
+
+                    elif param.type == 'typed_default_parameter':
+                        # Parameter with type and default: name: Type = value
+                        param_name = None
+                        param_type = None
+                        for typed_child in param.children:
+                            if typed_child.type == 'identifier':
+                                param_name = typed_child.text.decode('utf-8') if typed_child.text else ''
+                            elif typed_child.type == 'type':
+                                param_type = typed_child.text.decode('utf-8') if typed_child.text else ''
+                        if param_name:
+                            parameters.append((param_name, param_type))
+
+                    elif param.type == 'list_splat_pattern':
+                        # *args
+                        for splat_child in param.children:
+                            if splat_child.type == 'identifier':
+                                param_name = '*' + (splat_child.text.decode('utf-8') if splat_child.text else '')
+                                parameters.append((param_name, None))
+                                break
+
+                    elif param.type == 'dictionary_splat_pattern':
+                        # **kwargs
+                        for splat_child in param.children:
+                            if splat_child.type == 'identifier':
+                                param_name = '**' + (splat_child.text.decode('utf-8') if splat_child.text else '')
+                                parameters.append((param_name, None))
+                                break
+
+            # Extract return type annotation
+            elif child.type == 'type':
+                return_type = child.text.decode('utf-8') if child.text else None
+
+        # Also check for decorated_definition wrapper
+        if func_node.parent and func_node.parent.type == 'decorated_definition':
+            for child in func_node.parent.children:
+                if child.type == 'decorator':
+                    for deco_child in child.children:
+                        if deco_child.type == 'identifier':
+                            deco_name = deco_child.text.decode('utf-8') if deco_child.text else ''
+                            if deco_name and deco_name not in decorators:
+                                decorators.append(deco_name)
+                            break
+                        elif deco_child.type == 'call':
+                            for call_child in deco_child.children:
+                                if call_child.type == 'identifier':
+                                    deco_name = call_child.text.decode('utf-8') if call_child.text else ''
+                                    if deco_name and deco_name not in decorators:
+                                        decorators.append(deco_name)
+                                    break
+
+        return SignatureInfo(
+            parameters=tuple(parameters),
+            return_type=return_type,
+            decorators=tuple(decorators)
+        )
+
+    def extract_class_fields(self, class_node, code_bytes: bytes) -> Optional[Tuple[FieldInfo, ...]]:
+        """Extract class fields from tree-sitter class_definition node.
+
+        Captures annotated assignments in class body for dataclass-style display.
+        Returns up to 10 fields to keep output concise.
+        """
+        if class_node is None:
+            return None
+
+        fields = []
+
+        # Find the block (class body)
+        body = None
+        for child in class_node.children:
+            if child.type == 'block':
+                body = child
+                break
+
+        if not body:
+            return None
+
+        # Walk through statements in the class body
+        for stmt in body.children:
+            if len(fields) >= 10:  # Limit to 10 fields
+                break
+
+            # Look for annotated assignments: field: Type or field: Type = value
+            if stmt.type == 'expression_statement':
+                expr = stmt.children[0] if stmt.children else None
+                if expr and expr.type == 'assignment':
+                    # Check if left side has type annotation
+                    # Pattern: (identifier or attribute) : type = value
+                    # or just (identifier or attribute) : type
+                    left = None
+                    type_ann = None
+
+                    for i, child in enumerate(expr.children):
+                        if child.type == 'identifier':
+                            left = child.text.decode('utf-8') if child.text else None
+                        elif child.type == 'type':
+                            type_ann = child.text.decode('utf-8') if child.text else None
+
+                    if left and type_ann:
+                        fields.append(FieldInfo(name=left, type_annotation=type_ann))
+
+            # Also handle standalone type annotations: field: Type
+            elif stmt.type == 'type_alias_statement' or (stmt.type == 'expression_statement' and
+                    stmt.children and stmt.children[0].type == 'type'):
+                # This is a type annotation without assignment
+                pass
+
+        # Alternative: look for annotated_assignment nodes directly
+        if not fields:
+            for stmt in body.children:
+                if len(fields) >= 10:
+                    break
+
+                # Handle both expression_statement containing type or direct patterns
+                if stmt.type == 'expression_statement':
+                    for child in stmt.children:
+                        if child.type == 'assignment':
+                            # Check for pattern: name: type = value
+                            name = None
+                            type_ann = None
+                            for sub in child.children:
+                                if sub.type == 'identifier' and name is None:
+                                    name = sub.text.decode('utf-8') if sub.text else None
+                                elif sub.type == 'type':
+                                    type_ann = sub.text.decode('utf-8') if sub.text else None
+                            if name and type_ann:
+                                fields.append(FieldInfo(name=name, type_annotation=type_ann))
+
+        return tuple(fields) if fields else None
+
     def get_tags_raw(self, fname: str, rel_fname: str) -> List[Tag]:
         """Parse file to extract tags using Tree-sitter."""
         try:
@@ -217,17 +406,18 @@ class RepoMap:
             return []
         
         try:
-            tree = parser.parse(bytes(code, "utf-8"))
-            
+            code_bytes = bytes(code, "utf-8")
+            tree = parser.parse(code_bytes)
+
             # Load query from SCM file
             query_text = read_text(scm_fname, silent=True)
             if not query_text:
                 return []
-            
+
             query = language.query(query_text)
             cursor = QueryCursor(query)
             captures = cursor.captures(tree.root_node)
-            
+
             tags = []
             # Process captures as a dictionary
             for capture_name, nodes in captures.items():
@@ -280,6 +470,16 @@ class RepoMap:
                                     break
                             search_node = search_node.parent
 
+                    # Extract signature for functions or fields for classes
+                    # Only for definitions, not references
+                    signature = None
+                    fields = None
+                    if kind == "def" and my_definition:
+                        if node_type == "function":
+                            signature = self.extract_signature_info(my_definition, code_bytes)
+                        elif node_type == "class":
+                            fields = self.extract_class_fields(my_definition, code_bytes)
+
                     tags.append(Tag(
                         rel_fname=rel_fname,
                         fname=fname,
@@ -288,9 +488,11 @@ class RepoMap:
                         kind=kind,
                         node_type=node_type,
                         parent_name=parent_name,
-                        parent_line=parent_line
+                        parent_line=parent_line,
+                        signature=signature,
+                        fields=fields
                     ))
-            
+
             return tags
             
         except Exception as e:
@@ -341,18 +543,25 @@ class RepoMap:
         chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
         
         all_fnames = list(set(chat_fnames + other_fnames))
-        
-        for fname in all_fnames:
+
+        if self.verbose:
+            self.output_handlers['info'](f"Processing {len(all_fnames)} files for tag extraction...")
+
+        for idx, fname in enumerate(all_fnames):
             rel_fname = self.get_rel_fname(fname)
-            
+
+            # Show progress every 100 files or at key milestones
+            if self.verbose and (idx % 100 == 0 or idx == len(all_fnames) - 1):
+                self.output_handlers['info'](f"  [{idx + 1}/{len(all_fnames)}] {rel_fname}")
+
             if not os.path.exists(fname):
                 reason = "File not found"
                 excluded[fname] = reason
                 self.output_handlers['warning'](f"Repo-map can't include {fname}: {reason}")
                 continue
-                
+
             included.append(fname)
-            
+
             tags = self.get_tags(fname, rel_fname)
             
             for tag in tags:
@@ -387,15 +596,69 @@ class RepoMap:
         if not G.nodes():
             # Create empty file report for this edge case
             return [], FileReport(excluded, total_definitions, total_references, len(chat_fnames) + len(other_fnames))
-        
-        # Run PageRank
-        try:
-            if personalization:
-                ranks = nx.pagerank(G, personalization=personalization, alpha=0.85)
+
+        if self.verbose:
+            self.output_handlers['info'](f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+
+        # Build depth-based personalization for PageRank
+        # Root files get higher bias, but truly important deep files can still rank high
+        # if they're heavily interconnected with root files (graph structure wins)
+        depth_personalization = {}
+        for node in G.nodes():
+            depth = node.count('/')
+
+            # Check for vendor/third-party patterns
+            vendor_patterns = ['node_modules', 'vendor', 'third_party', 'torchhub', '__pycache__', 'site-packages']
+            is_vendor = any(pattern in node for pattern in vendor_patterns)
+
+            if is_vendor:
+                # Strong bias against vendor code
+                depth_personalization[node] = 0.01
+            elif depth <= 2:
+                # Strong bias for root/shallow files
+                depth_personalization[node] = 1.0
+            elif depth <= 4:
+                # Moderate bias
+                depth_personalization[node] = 0.5
             else:
-                ranks = {node: 1.0 for node in G.nodes()}
-        except Exception:
-            # Fallback to uniform ranking
+                # Weak bias for deep files (but graph can override)
+                depth_personalization[node] = 0.1
+
+        # Combine with chat file personalization if present
+        if personalization:
+            # Merge: multiply chat boost with depth bias
+            for node in depth_personalization:
+                if node in personalization:
+                    depth_personalization[node] *= personalization[node]
+
+        # Run PageRank with depth-aware personalization
+        try:
+            ranks = nx.pagerank(G, personalization=depth_personalization, alpha=0.85)
+
+            if self.verbose and ranks:
+                rank_values = list(ranks.values())
+                self.output_handlers['info'](
+                    f"PageRank scores (depth-aware) - min: {min(rank_values):.6f}, "
+                    f"max: {max(rank_values):.6f}, "
+                    f"avg: {sum(rank_values)/len(rank_values):.6f}"
+                )
+
+                # Show top files and their referrers for debugging
+                sorted_ranks = sorted(ranks.items(), key=lambda x: x[1], reverse=True)
+                self.output_handlers['info']("Top 5 files by PageRank:")
+                for i, (node, rank) in enumerate(sorted_ranks[:5]):
+                    # Count incoming edges (references TO this file)
+                    in_edges = list(G.in_edges(node))
+                    referrers = set(edge[0] for edge in in_edges)
+                    self.output_handlers['info'](
+                        f"  {i+1}. {node}: rank={rank:.6f}, "
+                        f"referenced_by={len(referrers)} files, "
+                        f"in_edges={len(in_edges)}"
+                    )
+        except Exception as e:
+            # Fallback to uniform ranking if PageRank fails
+            if self.verbose:
+                self.output_handlers['warning'](f"PageRank failed: {e}, using uniform ranking")
             ranks = {node: 1.0 for node in G.nodes()}
         
         # Update excluded dictionary with status information
@@ -527,6 +790,34 @@ class RepoMap:
 
             # Default
             'unknown': 'white'
+        }
+        return color_map.get(node_type, 'white')
+
+    def get_symbol_icon(self, node_type: str) -> str:
+        """Get icon/emoji for different symbol types."""
+        icon_map = {
+            'class': '󰠱 ',      # Nerd font class icon
+            'function': ' ',    # Function icon
+            'method': '󰊕 ',     # Method icon
+            'variable': '󰀫 ',   # Variable icon
+            'constant': '󰏿 ',   # Constant icon
+            'interface': '󰜰 ',  # Interface icon
+            'enum': ' ',       # Enum icon
+            'module': ' ',     # Module/package icon
+        }
+        return icon_map.get(node_type, '• ')
+
+    def get_symbol_color(self, node_type: str) -> str:
+        """Get color for symbol types in directory view."""
+        color_map = {
+            'class': 'bold cyan',
+            'function': 'bold yellow',
+            'method': 'yellow',
+            'variable': 'green',
+            'constant': 'bold green',
+            'interface': 'cyan',
+            'enum': 'cyan',
+            'module': 'blue',
         }
         return color_map.get(node_type, 'white')
 
@@ -720,7 +1011,8 @@ class RepoMap:
                         console.print(rich_line)
                     else:
                         # Fallback to simple coloring
-                        console.print(f"{loi:4d}: {indent}{line_text}", style="white")
+                        line_output = f"{loi:4d}: {indent}{line_text}"
+                        console.print(line_output, style="white")
 
             # Get the rendered output
             return string_io.getvalue().rstrip()
@@ -793,7 +1085,355 @@ class RepoMap:
                 )
         
         return "\n\n".join(tree_parts)
-    
+
+    def render_symbol(
+        self,
+        tag: Tag,
+        detail_level: DetailLevel,
+        seen_patterns: Optional[set] = None
+    ) -> str:
+        """Render a symbol name at the specified detail level.
+
+        Args:
+            tag: The tag to render
+            detail_level: LOW (name only), MEDIUM (with params), HIGH (full sig)
+            seen_patterns: For HIGH detail, tracks seen param:type patterns for dedup
+
+        Returns:
+            Rendered symbol string (e.g., "connect", "connect(hobo, remote)",
+            or "connect(hobo: HoboWindow) -> bool")
+        """
+        name = tag.name
+
+        if detail_level == DetailLevel.LOW:
+            # Just the name for functions, add fields preview for classes
+            if tag.node_type == "class" and tag.fields:
+                # Show class with field count preview
+                return f"{name}({len(tag.fields)} fields)"
+            return name
+
+        # MEDIUM or HIGH: include signature for functions
+        if tag.node_type in ("function", "method") and tag.signature:
+            sig_str = tag.signature.render(detail_level, seen_patterns)
+            return f"{name}{sig_str}"
+
+        # MEDIUM or HIGH: include fields for classes
+        if tag.node_type == "class" and tag.fields:
+            if detail_level == DetailLevel.MEDIUM:
+                # Simplified: just field names
+                field_names = ", ".join(f.name for f in tag.fields[:5])
+                if len(tag.fields) > 5:
+                    field_names += f", +{len(tag.fields) - 5}"
+                return f"{name}({field_names})"
+            else:  # HIGH
+                # Full field types
+                field_strs = [f.render(detail_level) for f in tag.fields[:5]]
+                if len(tag.fields) > 5:
+                    field_strs.append(f"+{len(tag.fields) - 5}")
+                return f"{name}({', '.join(field_strs)})"
+
+        return name
+
+    def to_directory_overview(
+        self,
+        tags: List[Tuple[float, Tag]],
+        chat_rel_fnames: Set[str],
+        detail_level: DetailLevel = DetailLevel.LOW
+    ) -> str:
+        """Convert ranked tags to compact directory overview format.
+
+        Shows files with their symbols in a condensed format using icons.
+        Uses heuristics to choose between single-line, multi-line, or single-class format.
+
+        Detail levels control how much signature info is shown:
+        - LOW: Symbol names only (default, most compact)
+        - MEDIUM: Names with simplified parameter names
+        - HIGH: Full signatures with types
+
+        Smart deduplication: At HIGH detail, repeated parameter patterns like
+        `hobo: HoboWindow` are shown once, then just `hobo` for subsequent uses.
+        """
+        if not tags:
+            return ""
+
+        from io import StringIO
+        string_io = StringIO()
+        # Use very large width to prevent Rich's automatic wrapping - we handle wrapping manually
+        console = Console(file=string_io, force_terminal=True, width=999999)
+
+        # Per-file seen pattern tracking for smart deduplication
+        # Key: rel_fname, Value: set of "param_name:type" patterns already shown
+        seen_patterns: Dict[str, set] = defaultdict(set)
+
+        # Group tags by file
+        file_tags = defaultdict(list)
+        for rank, tag in tags:
+            if tag.kind == 'def':  # Only include definitions
+                file_tags[tag.rel_fname].append((rank, tag))
+
+        # Sort files by importance
+        sorted_files = sorted(
+            file_tags.items(),
+            key=lambda x: max(rank for rank, tag in x[1]),
+            reverse=True
+        )
+
+        # Get terminal width for line-fitting heuristic
+        import shutil
+        term_width = shutil.get_terminal_size().columns
+
+        for rel_fname, file_tag_list in sorted_files:
+            # Calculate max rank for this file for verbose logging
+            max_rank = max(rank for rank, tag in file_tag_list)
+
+            if self.verbose:
+                self.output_handlers['info'](f"  {rel_fname}: rank={max_rank:.4f}")
+
+            # Get per-file seen patterns for dedup
+            file_seen = seen_patterns[rel_fname]
+
+            # Group tags by type (keep full tag for signature rendering)
+            grouped: Dict[str, List[Tag]] = defaultdict(list)
+            for rank, tag in file_tag_list:
+                grouped[tag.node_type].append(tag)
+
+            # Apply heuristics to choose display format
+            total_symbols = sum(len(tags_list) for tags_list in grouped.values())
+            num_classes = len(grouped.get('class', []))
+            num_methods = len(grouped.get('method', []))
+
+            # Calculate estimated line length for single-line format
+            # At LOW detail, just use names; at higher detail, estimate longer strings
+            all_tags_flat = [t for tags_list in grouped.values() for t in tags_list]
+            if detail_level == DetailLevel.LOW:
+                estimated_length = len(rel_fname) + 2 + sum(len(t.name) for t in all_tags_flat) + (len(all_tags_flat) - 1) * 2
+            else:
+                # Higher detail levels produce longer output - estimate conservatively
+                estimated_length = term_width  # Force multi-line for detail
+
+            # Heuristic 1: Single class with methods -> special format
+            if num_classes == 1 and num_methods > 0 and total_symbols < 15:
+                class_tag = grouped['class'][0]
+                method_tags = grouped.get('method', [])
+
+                text = Text()
+                text.append(f"{rel_fname}: ", style="bold blue")
+                text.append("class ", style="bold magenta")
+                class_display = self.render_symbol(class_tag, detail_level, file_seen)
+                text.append(class_display, style="bold cyan")
+                text.append(": ", style="dim white")
+
+                for i, method_tag in enumerate(method_tags):
+                    if i > 0:
+                        text.append(", ", style="dim white")
+                    method_display = self.render_symbol(method_tag, detail_level, file_seen)
+                    text.append(method_display, style="yellow")
+
+                console.print(text, no_wrap=True)
+
+            # Heuristic 2: Fits on one line -> single line format
+            elif estimated_length < term_width * 0.8:  # Use 80% of terminal width as threshold
+                all_symbols = []
+                for node_type, tags_list in sorted(grouped.items()):
+                    for tag in tags_list:
+                        all_symbols.append((node_type, tag))
+
+                # Build the output with manual wrapping and indentation
+                prefix = f"{rel_fname}: "
+                indent = " " * len(prefix)
+
+                text = Text()
+                text.append(prefix, style="bold blue")
+
+                current_line_length = len(prefix)
+                for i, (node_type, tag) in enumerate(all_symbols):
+                    display_name = self.render_symbol(tag, detail_level, file_seen)
+                    separator = ", " if i > 0 else ""
+                    item_length = len(separator) + len(display_name)
+
+                    # Check if we need to wrap
+                    if i > 0 and current_line_length + item_length > term_width - 5:
+                        text.append("\n" + indent)
+                        current_line_length = len(indent)
+                        separator = ""
+
+                    if separator:
+                        text.append(separator, style="dim white")
+                    color = self.get_symbol_color(node_type)
+                    text.append(display_name, style=color)
+                    current_line_length += item_length
+
+                console.print(text, no_wrap=True)
+
+            # Heuristic 3: Many symbols -> multi-line grouped
+            else:
+                # File name header
+                text = Text()
+                text.append(f"{rel_fname}:", style="bold blue")
+                console.print(text, no_wrap=True)
+
+                # Group and display by type
+                for node_type in ['class', 'function', 'method', 'variable', 'constant']:
+                    if node_type not in grouped:
+                        continue
+
+                    tags_list = grouped[node_type]
+                    icon = self.get_symbol_icon(node_type)
+                    color = self.get_symbol_color(node_type)
+
+                    # Calculate indentation for wrapped lines
+                    prefix = f"  {icon}"
+                    indent = " " * len(prefix)
+
+                    line = Text()
+                    line.append(prefix, style=color)
+
+                    current_line_length = len(prefix)
+                    for i, tag in enumerate(tags_list):
+                        display_name = self.render_symbol(tag, detail_level, file_seen)
+                        separator = ", " if i > 0 else ""
+                        item_length = len(separator) + len(display_name)
+
+                        # Check if we need to wrap
+                        if i > 0 and current_line_length + item_length > term_width - 5:
+                            line.append("\n" + indent)
+                            current_line_length = len(indent)
+                            separator = ""
+
+                        if separator:
+                            line.append(separator, style="dim white")
+                        line.append(display_name, style=color)
+                        current_line_length += item_length
+
+                    console.print(line, no_wrap=True)
+
+        # Add summary section: other files and classes in the project
+        shown_files = set(rel_fname for rel_fname, _ in sorted_files)
+        all_files = set(tag.rel_fname for _, tag in tags)
+        other_files = sorted(all_files - shown_files)
+
+        # Collect all classes
+        # TODO: Future enhancement - extract inheritance hierarchies and type annotations
+        # from tree-sitter to build class hierarchy graph and show parent/child relationships
+        all_classes = set()
+        class_to_file = {}
+        for _, tag in tags:
+            if tag.node_type == 'class' and tag.kind == 'def':
+                all_classes.add(tag.name)
+                if tag.name not in class_to_file:
+                    class_to_file[tag.name] = tag.rel_fname
+
+        if other_files or all_classes:
+            console.print("")  # Blank line
+            console.print(Text("═" * 80, style="dim"))
+
+        # Show other files (not detailed above)
+        if other_files:
+            console.print(Text("\nOther files in project:", style="bold yellow"))
+            # Show in columns
+            files_per_line = 3
+            for i in range(0, len(other_files), files_per_line):
+                line_files = other_files[i:i + files_per_line]
+                text = Text("  ")
+                for j, fname in enumerate(line_files):
+                    if j > 0:
+                        text.append(" │ ", style="dim")
+                    text.append(fname, style="cyan")
+                console.print(text, no_wrap=True)
+
+        # Show all classes in a tree structure organized by directory hierarchy
+        # Clean indentation without tree line characters to maximize signal
+        if all_classes:
+            console.print(Text("\nClasses in project:", style="bold yellow"))
+
+            # Build a tree structure: path components -> file -> classes
+            file_to_classes = defaultdict(list)
+            for cls in all_classes:
+                file_to_classes[class_to_file[cls]].append(cls)
+
+            # Build directory tree
+            tree = {}
+            for file_path in sorted(file_to_classes.keys()):
+                parts = file_path.split('/')
+                tree_key = '/'.join(parts[:-1]) if len(parts) > 1 else ''
+                filename = parts[-1]
+                if tree_key not in tree:
+                    tree[tree_key] = {}
+                tree[tree_key][filename] = sorted(file_to_classes[file_path])
+
+            # Build directory hierarchy
+            all_dirs = set()
+            for file_path in file_to_classes.keys():
+                parts = file_path.split('/')
+                if len(parts) > 1:
+                    for i in range(1, len(parts)):
+                        all_dirs.add('/'.join(parts[:i]))
+
+            sorted_dirs = sorted(all_dirs, key=lambda d: (d.count('/'), d))
+            rendered = set()
+
+            def render_directory_tree(dir_path, depth=0):
+                """Render a directory and all its subdirectories/files with clean indentation."""
+                if dir_path in rendered:
+                    return
+                rendered.add(dir_path)
+
+                parts = dir_path.split('/')
+                dir_name = parts[-1]
+                indent = "  " * depth
+
+                # Find immediate children (subdirs and files)
+                children_dirs = []
+                for d in sorted_dirs:
+                    if d.startswith(dir_path + '/') and d.count('/') == dir_path.count('/') + 1:
+                        children_dirs.append(d)
+
+                # Show directory name
+                dir_text = Text(indent)
+                dir_text.append(dir_name + "/", style="bold blue")
+                console.print(dir_text, no_wrap=True)
+
+                # Render files in this directory
+                if dir_path in tree:
+                    files = tree[dir_path]
+                    for filename, classes in sorted(files.items()):
+                        file_text = Text("  " * (depth + 1))
+                        file_text.append(filename, style="yellow")
+                        file_text.append(": ", style="dim")
+
+                        # Format classes
+                        if len(classes) <= 3:
+                            file_text.append(", ".join(classes), style="cyan")
+                        else:
+                            file_text.append(", ".join(classes[:3]), style="cyan")
+                            file_text.append(f", +{len(classes)-3} more", style="dim")
+
+                        console.print(file_text, no_wrap=True)
+
+                # Recursively render subdirectories
+                for subdir in children_dirs:
+                    render_directory_tree(subdir, depth + 1)
+
+            # Render root-level files first
+            if '' in tree:
+                for filename, classes in sorted(tree[''].items()):
+                    file_text = Text("  ")
+                    file_text.append(filename, style="yellow")
+                    file_text.append(": ", style="dim")
+                    if len(classes) <= 3:
+                        file_text.append(", ".join(classes), style="cyan")
+                    else:
+                        file_text.append(", ".join(classes[:3]), style="cyan")
+                        file_text.append(f", +{len(classes)-3} more", style="dim")
+                    console.print(file_text, no_wrap=True)
+
+            # Render top-level directories
+            top_level_dirs = [d for d in sorted_dirs if '/' not in d]
+            for top_dir in sorted(top_level_dirs):
+                render_directory_tree(top_dir, depth=1)
+
+        return string_io.getvalue().rstrip()
+
     def get_ranked_tags_map(
         self,
         chat_fnames: List[str],
@@ -831,45 +1471,89 @@ class RepoMap:
         mentioned_fnames: Optional[Set[str]] = None,
         mentioned_idents: Optional[Set[str]] = None
     ) -> Tuple[Optional[str], FileReport]:
-        """Generate the ranked tags map without caching."""
+        """Generate the ranked tags map without caching.
+
+        Uses multi-configuration optimization to find the best combination of
+        tag count and detail level that fits within the token budget while
+        maximizing information content.
+
+        The optimizer tries configs in descending score order (coverage * 10 + detail)
+        which prioritizes more tags over higher detail levels.
+        """
         ranked_tags, file_report = self.get_ranked_tags(
             chat_fnames, other_fnames, mentioned_fnames, mentioned_idents
         )
-        
+
         if not ranked_tags:
             return None, file_report
 
-        # Binary search to find the right number of tags
         chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
-        
-        def try_tags(num_tags: int) -> Tuple[Optional[str], int]:
-            if num_tags <= 0:
-                return None, 0
-            
-            selected_tags = ranked_tags[:num_tags]
-            tree_output = self.to_tree(selected_tags, chat_rel_fnames)
-            
-            if not tree_output:
-                return None, 0
-            
-            tokens = self.token_count(tree_output)
-            return tree_output, tokens
-        
-        # Binary search for optimal number of tags
-        left, right = 0, len(ranked_tags)
-        best_tree = None
-        
-        while left <= right:
-            mid = (left + right) // 2
-            tree_output, tokens = try_tags(mid)
-            
-            if tree_output and tokens <= max_map_tokens:
-                best_tree = tree_output
-                left = mid + 1
+        n = len(ranked_tags)
+
+        # Generate configuration space: various tag counts × detail levels
+        # More granular tag counts for better optimization
+        tag_counts = sorted(set([
+            n,
+            int(n * 0.9),
+            int(n * 0.75),
+            int(n * 0.5),
+            int(n * 0.25),
+            min(n, 50),
+            min(n, 25),
+            min(n, 10)
+        ]), reverse=True)
+        tag_counts = [c for c in tag_counts if c > 0]
+
+        # For non-directory mode, only use LOW detail (tree view handles its own formatting)
+        if self.directory_mode:
+            detail_levels = [DetailLevel.HIGH, DetailLevel.MEDIUM, DetailLevel.LOW]
+        else:
+            detail_levels = [DetailLevel.LOW]
+
+        # Create all configs and sort by score (descending)
+        configs = [RenderConfig(num_tags=c, detail_level=d)
+                   for c in tag_counts for d in detail_levels]
+        configs.sort(key=lambda x: x.score, reverse=True)
+
+        if self.verbose:
+            self.output_handlers['info'](
+                f"Optimizing: {len(configs)} configs, {n} total tags, {max_map_tokens} token budget"
+            )
+
+        # Try each config in score order, return first that fits
+        for config in configs:
+            selected_tags = ranked_tags[:config.num_tags]
+
+            if self.directory_mode:
+                tree_output = self.to_directory_overview(
+                    selected_tags, chat_rel_fnames, config.detail_level
+                )
             else:
-                right = mid - 1
-        
-        return best_tree, file_report
+                tree_output = self.to_tree(selected_tags, chat_rel_fnames)
+
+            if not tree_output:
+                continue
+
+            tokens = self.token_count(tree_output)
+            if tokens <= max_map_tokens:
+                if self.verbose:
+                    detail_name = config.detail_level.name
+                    self.output_handlers['info'](
+                        f"Selected: {config.num_tags} tags, {detail_name} detail, {tokens} tokens"
+                    )
+                return tree_output, file_report
+
+        # Fallback: minimal output if nothing fits
+        if self.verbose:
+            self.output_handlers['info']("Using minimal fallback output")
+
+        minimal_tags = ranked_tags[:min(10, n)]
+        if self.directory_mode:
+            return self.to_directory_overview(
+                minimal_tags, chat_rel_fnames, DetailLevel.LOW
+            ), file_report
+        else:
+            return self.to_tree(minimal_tags, chat_rel_fnames), file_report
     
     def get_repo_map(
         self,
@@ -913,7 +1597,6 @@ class RepoMap:
             return None, FileReport({}, 0, 0, 0)  # Ensure consistent return type
         
         if map_string is None:
-            print("map_string is None")
             return None, file_report
         
         if self.verbose:

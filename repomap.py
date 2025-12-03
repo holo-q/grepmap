@@ -17,21 +17,155 @@ from utils import count_tokens, read_text
 from repomap_class import RepoMap
 
 
+def get_source_dirs_from_pyproject(directory: str) -> List[str]:
+    """Extract source directories from pyproject.toml if it exists."""
+    pyproject_path = Path(directory) / "pyproject.toml"
+    if not pyproject_path.exists():
+        return []
+
+    import tomllib  # Python 3.11+ (required by project)
+
+    try:
+        with open(pyproject_path, 'rb') as f:
+            data = tomllib.load(f)
+
+        src_dirs = []
+
+        # Check [tool.ty.src] for type checker source configuration
+        ty_config = data.get('tool', {}).get('ty', {}).get('src', {})
+        if 'include' in ty_config:
+            includes = ty_config['include']
+            if isinstance(includes, list):
+                src_dirs.extend(includes)
+
+        # Check [tool.setuptools] for packages or py-modules
+        setuptools = data.get('tool', {}).get('setuptools', {})
+
+        # Handle packages (list of package names or find directive)
+        if 'packages' in setuptools:
+            packages = setuptools['packages']
+            if isinstance(packages, list):
+                src_dirs.extend(packages)
+
+        # Handle py-modules (individual module files)
+        if 'py-modules' in setuptools:
+            modules = setuptools['py-modules']
+            if isinstance(modules, list):
+                # These are typically in the root, but we'll add them as potential files
+                for module in modules:
+                    module_path = Path(directory) / f"{module}.py"
+                    if module_path.exists():
+                        src_dirs.append(str(module_path))
+
+        # Check for package-dir (custom source directory mapping)
+        if 'package-dir' in setuptools:
+            pkg_dir = setuptools['package-dir']
+            if isinstance(pkg_dir, dict) and '' in pkg_dir:
+                src_dirs.append(pkg_dir[''])
+
+        # Common convention: check if 'src' directory exists
+        src_path = Path(directory) / "src"
+        if src_path.exists() and src_path.is_dir() and "src" not in src_dirs:
+            src_dirs.append("src")
+
+        return src_dirs
+    except Exception:
+        return []
+
+
 def find_src_files(directory: str) -> List[str]:
-    """Find source files in a directory."""
+    """Find source files in a directory, respecting .gitignore if in a git repo.
+
+    Logic: pyproject.toml defines what to include, gitignore defines what to exclude.
+    If pyproject.toml specifies source dirs, we start with those and apply gitignore filtering.
+    """
     if not os.path.isdir(directory):
         return [directory] if os.path.isfile(directory) else []
-    
+
+    import subprocess
+
+    # Check if pyproject.toml defines source directories
+    src_dirs = get_source_dirs_from_pyproject(directory)
+
+    # Try using git to respect .gitignore
+    try:
+        if src_dirs:
+            # pyproject.toml specifies source dirs - run git ls-files on each dir
+            # This gives us: files in source dirs that aren't gitignored
+            src_files = []
+            for src_dir in src_dirs:
+                src_path = Path(directory) / src_dir
+
+                # Handle individual .py files
+                if src_dir.endswith('.py') and src_path.is_file():
+                    # Check if file is tracked by git (not ignored)
+                    result = subprocess.run(
+                        ['git', 'ls-files', '--error-unmatch', src_dir],
+                        cwd=directory,
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        src_files.append(str(src_path))
+                # Handle directories
+                elif src_path.is_dir():
+                    result = subprocess.run(
+                        ['git', 'ls-files', src_dir],
+                        cwd=directory,
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if result.returncode == 0:
+                        for line in result.stdout.strip().split('\n'):
+                            if line:
+                                full_path = Path(directory) / line
+                                if full_path.is_file():
+                                    src_files.append(str(full_path))
+            return src_files
+        else:
+            # No pyproject.toml - use git ls-files for everything
+            result = subprocess.run(
+                ['git', 'ls-files'],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                src_files = []
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        full_path = os.path.join(directory, line)
+                        if os.path.isfile(full_path):
+                            src_files.append(full_path)
+                return src_files
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        # Git not available or timed out, fall back to manual walk
+        pass
+
+    # Fallback: manual walk (less reliable, doesn't respect .gitignore)
+    # If src_dirs specified, only walk those; otherwise walk everything
     src_files = []
-    for root, dirs, files in os.walk(directory):
-        # Skip hidden directories and common non-source directories
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in {'node_modules', '__pycache__', 'venv', 'env'}]
-        
-        for file in files:
-            if not file.startswith('.'):
-                full_path = os.path.join(root, file)
-                src_files.append(full_path)
-    
+    if src_dirs:
+        for src_dir in src_dirs:
+            src_path = Path(directory) / src_dir
+            if src_path.is_file() and src_dir.endswith('.py'):
+                src_files.append(str(src_path))
+            elif src_path.is_dir():
+                for root, dirs, files in os.walk(src_path):
+                    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in {'node_modules', '__pycache__', 'venv', 'env'}]
+                    for file in files:
+                        if not file.startswith('.'):
+                            src_files.append(os.path.join(root, file))
+    else:
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in {'node_modules', '__pycache__', 'venv', 'env'}]
+            for file in files:
+                if not file.startswith('.'):
+                    src_files.append(os.path.join(root, file))
+
     return src_files
 
 
@@ -143,6 +277,18 @@ Examples:
         help="Disable semantic color highlighting (enabled by default)"
     )
 
+    parser.add_argument(
+        "--tree",
+        action="store_true",
+        help="Use detailed tree view instead of compact directory overview"
+    )
+
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear the tags cache before running (useful for testing or fixing corrupted cache)"
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -177,6 +323,9 @@ Examples:
     # Convert to absolute paths
     chat_files = [str(Path(f).resolve()) for f in chat_files_from_args]
     other_files = [str(Path(f).resolve()) for f in effective_other_files_unresolved]
+
+    if args.verbose:
+        tool_output(f"Found {len(chat_files)} chat files, {len(other_files)} other files")
 
     # Auto-detect root if not explicitly provided and files are from outside current directory
     # This ensures that when you run "repomap /some/other/path/file.py" it automatically
@@ -218,11 +367,31 @@ Examples:
     if args.verbose:
         print(f"Root path: {root_path}")
     print(f"Chat files: {chat_files}")
-    
+
+    # Clear cache if requested
+    if args.clear_cache:
+        import shutil
+        from repomap_class import CACHE_VERSION
+        cache_dir = root_path / f".repomap.tags.cache.v{CACHE_VERSION}"
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+            tool_output(f"Cleared cache: {cache_dir}")
+        else:
+            tool_output(f"No cache to clear at: {cache_dir}")
+
     # Convert mentioned files to sets
     mentioned_fnames = set(args.mentioned_files) if args.mentioned_files else None
     mentioned_idents = set(args.mentioned_idents) if args.mentioned_idents else None
-    
+
+    # Auto-detect mode: use tree view for single files, directory view for multiple files/directories
+    # User can override with --tree flag
+    use_directory_mode = not args.tree  # Default from flag
+    if not args.tree:  # Only auto-detect if user didn't explicitly request tree mode
+        # Use tree mode (not directory mode) if analyzing a single file
+        total_files = len(chat_files) + len(other_files)
+        if total_files == 1:
+            use_directory_mode = False
+
     # Create RepoMap instance
     repo_map = RepoMap(
         map_tokens=args.map_tokens,
@@ -233,7 +402,8 @@ Examples:
         verbose=args.verbose,
         max_context_window=args.max_context_window,
         exclude_unranked=args.exclude_unranked,
-        color=not args.no_color
+        color=not args.no_color,
+        directory_mode=use_directory_mode
     )
     
     # Generate the map
