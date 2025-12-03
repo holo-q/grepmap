@@ -1,296 +1,151 @@
-# RepoMap - Command-Line Tool and MCP Server
+# grepmap
 
-RepoMap is a powerful tool designed to help, primarily LLMs, understand and navigate complex codebases. It functions both as a command-line application for on-demand analysis and as an MCP (Model Context Protocol) server, providing continuous repository mapping capabilities to other applications. By generating a "map" of the software repository, RepoMap highlights important files, code definitions, and their relationships. It leverages Tree-sitter for accurate code parsing and the PageRank algorithm to rank code elements by importance, ensuring that the most relevant information is always prioritized.
+**Dox your codebase for Claude.**
 
+You know how Claude sometimes fumbles around your repo like a tourist with a bad map? grepmap fixes that. It generates a structural exposé of your codebase—ranking files by *actual importance* using PageRank, not just alphabetical order or vibes.
 
-## Table of Contents
-- [Aider](#aider)
-- [Example Output](#example-output)
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-  - [Basic Usage](#basic-usage)
-  - [Advanced Options](#advanced-options)
-- [How It Works](#how-it-works)
-- [Output Format](#output-format)
-- [Dependencies](#dependencies)
-- [Caching](#caching)
-- [Supported Languages](#supported-languages)
-- [License](#license)
-- [Running as an MCP Server](#running-as-an-mcp-server)
-  - [Setup](#setup)
-  - [Usage](#usage-1)
-- [Changelog](#changelog)
-----------
+Feed it to your AI assistant and watch it suddenly *get* your project.
 
-## Aider
+## What It Does
 
-RepoMap is 100% based on Aider's Repo map functionality, but I don't believe it shares any code with it. Allow me to explain.
+grepmap builds a dependency graph of your code using tree-sitter, then runs PageRank to find out which files are the main characters and which are just extras. The result is a condensed map that fits in an LLM's context window, showing:
 
-My original effort was to take the RepoMap class from Aider, remove all the aider-specific dependencies, and then make it into a command-line tool. Python isn't my native language and I really struggled to get it to work.
-
-So a few hours ago, I had a different idea. I took the RepoMap and some of its related code from aider and I fed it to an LLM (Either Claude or Gemini 2.5 Pro, can't remember) and had it create specifications for this, basically, from aider's implementation. So it generated a very detailed specification for this application (minus the MCP bits) and then I fed that to, well, Aider with Claude 3.7, and it built the command-line version of this.
-
-I then used a combination of Aider w/Claude 3.7, Cline w/Gemini 2.5 Pro Preview & Gemini 2.5 Flash Preview, and Phind.com, and Gemini.com and Claude.com and ChatGPT.com and after a few hours, I finally got the MCP server sorted out. Again, keeping in mind, Python isn't really my native tongue.
-
-----------
-
-## Example Output
+- **Who talks to who** — files ranked by how much other code depends on them
+- **The family tree** — classes, functions, methods organized by directory topology
+- **The VIPs** — symbols that actually matter, not just whatever's alphabetically first
 
 ```
-> python repomap.py . --chat-files repomap_class.py
-Chat files: ['/mnt/programming/RepoMapper/repomap_class.py']
-repomap_class.py:
-(Rank value: 10.8111)
-
-  36: CACHE_VERSION = 1
-  39: TAGS_CACHE_DIR = os.path.join(os.getcwd(), f".repomap.tags.cache.v{CACHE_VERSION}")
-  40: SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError)
-  43: Tag = namedtuple("Tag", "rel_fname fname line name kind".split())
-  46: class RepoMap:
-  49:     def __init__(
-  93:     def load_tags_cache(self):
- 102:     def save_tags_cache(self):
- 459:     def get_ranked_tags_map_uncached(
- 483:         def try_tags(num_tags: int) -> Tuple[Optional[str], int]:
- 512:     def get_repo_map(
-
-utils.py:
-(Rank value: 0.2297)
-
-  18: Tag = namedtuple("Tag", "rel_fname fname line name kind".split())
-  21: def count_tokens(text: str, model_name: str = "gpt-4") -> int:
-  35: def read_text(filename: str, encoding: str = "utf-8", silent: bool = False) -> Optional[str]:
-
-importance.py:
-(Rank value: 0.1149)
-
-   8: IMPORTANT_FILENAMES = {
-  27: IMPORTANT_DIR_PATTERNS = {
-  34: def is_important(rel_file_path: str) -> bool:
-  56: def filter_important_files(file_paths: List[str]) -> List[str]:
-
-    ...
-    ...
-    ...
+src/
+  session.py: Session, FramedirStorage, ResdirMixin, +7 more
+  hud.py: HUD, DrawSignal, NameContext
+  deploy/
+    DiscoSSH.py: DiscoSSH, LogBuffer, NoTermSSHClientConnection, +1 more
+    manage_layout.py: ManageLayout
+  gui/
+    old/
+      DPG.py: ContainerProxy, DPG, HorizontalColumnContext
 ```
 
-----------
-
-## Features
-
--   **Smart Code Analysis**: Uses Tree-sitter to parse source code and extract function/class definitions
--   **Relevance Ranking**: Employs PageRank algorithm to rank code elements by importance
--   **Token-Aware**: Respects token limits to fit within LLM context windows
--   **Caching**: Persistent caching for fast subsequent runs
--   **Multi-Language**: Supports Python, JavaScript, TypeScript, Java, C/C++, Go, Rust, and more
--   **Important File Detection**: Automatically identifies and prioritizes important files (README, requirements.txt, etc.)
-
-----------
+The deeply nested vendor code that nobody actually uses? Demoted. Your core `session.py` that everything imports? Promoted. PageRank doesn't lie.
 
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install grepmap
 ```
 
-----------
+Or with uv:
+```bash
+uv tool install grepmap
+```
 
 ## Usage
 
-### Basic Usage
-
 ```bash
-# Map current directory
-python repomap.py .
+# Dox the current directory
+grepmap .
 
-# Map specific directory with custom token limit
-python repomap.py src/ --map-tokens 2048
+# Dox with more context
+grepmap . --map-tokens 4096
 
-# Map specific files
-python repomap.py file1.py file2.py
+# Focus on specific files (higher priority in ranking)
+grepmap --chat-files main.py session.py --other-files src/
 
-# Specify chat files (higher priority) vs other files
-python repomap.py --chat-files main.py --other-files src/
+# Tree view for deep-diving a single file
+grepmap path/to/file.py --tree
 
-# Specify mentioned files and identifiers
-python repomap.py --mentioned-files config.py --mentioned-idents "main_function"
-
-# Enable verbose output
-python repomap.py . --verbose
-
-# Force refresh of caches
-python repomap.py . --force-refresh
-
-# Specify model for token counting
-python repomap.py . --model gpt-3.5-turbo
-
-# Set maximum context window
-python repomap.py . --max-context-window 8192
-
-# Exclude files with Page Rank 0
-python repomap.py . --exclude-unranked
+# Clear the cache if things get weird
+grepmap . --clear-cache
 ```
 
-The tool prioritizes files in the following order:
+### CLI Options
 
-1.  `--chat-files`: These files are given the highest priority, as they're assumed to be the files you're currently working on.
-2.  `--mentioned-files`: These files are given a high priority, as they're explicitly mentioned in the current context.
-3.  `--other-files`: These files are given the lowest priority and are used to provide additional context.
+| Flag | What it does |
+|------|--------------|
+| `--map-tokens N` | Token budget for the map (default: 8192) |
+| `--chat-files` | Files you're actively working on (get ranking boost) |
+| `--other-files` | Additional context files |
+| `--mentioned-files` | Files mentioned in conversation (mid-level boost) |
+| `--mentioned-idents` | Identifiers to boost (function names, classes, etc.) |
+| `--tree` | Detailed tree view instead of directory overview |
+| `--exclude-unranked` | Hide files with PageRank of 0 |
+| `--no-color` | Disable syntax highlighting |
+| `--verbose` | Show ranking details and debug info |
+| `--force-refresh` | Ignore cache, reparse everything |
+| `--clear-cache` | Nuke the cache directory |
 
-### Advanced Options
+## How It Actually Works
+
+1. **Parse everything** — tree-sitter extracts definitions and references from your code
+2. **Build the graph** — files become nodes, symbol references become edges
+3. **Run PageRank** — with depth-aware personalization that penalizes `node_modules` and `vendor/` while letting truly interconnected deep files rise
+4. **Binary search for fit** — finds the maximum content that fits your token budget
+5. **Render prettily** — syntax highlighting, directory trees, class summaries
+
+The depth penalty is applied *in graph space*, not as post-processing. This means if some deeply nested file is genuinely crucial (referenced by 166 files with 313 edges), PageRank will surface it anyway. The algorithm respects reality over appearances.
+
+## MCP Server
+
+grepmap ships with an MCP server for integration with AI tools:
 
 ```bash
-# Enable verbose output
-python repomap.py . --verbose
-
-# Force refresh of caches
-python repomap.py . --force-refresh
-
-# Specify model for token counting
-python repomap.py . --model gpt-3.5-turbo
-
-# Set maximum context window
-python repomap.py . --max-context-window 8192
-
-# Exclude files with Page Rank 0
-python repomap.py . --exclude-unranked
-
-# Mention specific files or identifiers for higher priority
-python repomap.py . --mentioned-files config.py --mentioned-idents "main_function"
+grepmap-mcp
 ```
 
-----------
-
-## How It Works
-
-1.  **File Discovery**: Scans the repository for source files
-2.  **Code Parsing**: Uses Tree-sitter to parse code and extract definitions/references
-3.  **Graph Building**: Creates a graph where files are nodes and symbol references are edges
-4.  **Ranking**: Applies PageRank algorithm to rank files and symbols by importance
-5.  **Token Optimization**: Uses binary search to fit the most important content within token limits
-6.  **Output Generation**: Formats the results as a readable code map
-
-----------
-
-## Output Format
-
-The tool generates a structured view of your codebase showing:
-
--   File paths and important code sections
--   Function and class definitions
--   Key relationships between code elements
--   Prioritized based on actual usage and references
-
-----------
-
-## Dependencies
-
--   `tiktoken`: Token counting for various LLM models
--   `networkx`: Graph algorithms (PageRank)
--   `diskcache`: Persistent caching
--   `grep-ast`: Tree-sitter integration for code parsing
--   `tree-sitter`: Code parsing framework
--   `pygments`: Syntax highlighting and lexical analysis
-
-----------
-
-## Caching
-
-The tool uses persistent caching to speed up subsequent runs:
-
--   Cache directory: `.repomap.tags.cache.v1/`
--   Automatically invalidated when files change
--   Can be cleared with `--force-refresh`
-
-----------
-
-## Supported Languages
-
-Currently supports languages with Tree-sitter grammars:
-
--   arduino
--   chatito
--   commonlisp
--   cpp
--   csharp
--   c
--   dart
--   d
--   elisp
--   elixir
--   elm
--   gleam
--   go
--   javascript
--   java
--   lua
--   ocaml_interface
--   ocaml
--   pony
--   properties
--   python
--   racket
--   r
--   ruby
--   rust
--   solidity
--   swift
--   udev
--   c_sharp
--   hcl
--   kotlin
--   php
--   ql
--   scala
-
-----------
-
-## License
-
-This implementation is based on the RepoMap design from the Aider project.
-
-----------
-
-## Running as an MCP Server
-
-RepoMap can also be run as an MCP (Model Context Protocol) server, allowing other applications to access its repository mapping capabilities.
-
-### Setup
-
-1. The RepoMap MCP server uses STDIO (standard input/output) for communication. No additional configuration is required for the transport layer.
-2. To set up RepoMap as an MCP server with Cline (or similar tools like Roo), add the following configuration to your Cline settings file (e.g., `cline_mcp_settings.json`):
+Configure in your MCP client (e.g., Claude Desktop, Cline):
 
 ```json
 {
   "mcpServers": {
-    "RepoMapper": {
-      "disabled": false,
-      "timeout": 60,
-      "type": "stdio",
-      "command": "/usr/bin/python3",
-      "args": [
-        "/absolute/path/to/repomap_server.py"
-      ]
+    "grepmap": {
+      "command": "grepmap-mcp"
     }
   }
 }
 ```
 
-- Replace `"/absolute/path/to/repomap_server.py"` with the actual path to your `repomap_server.py` file.
+### MCP Tools
 
-### Usage
+- **`grep_map`** — Generate a ranked map of a project
+- **`search_identifiers`** — Search for symbols across the codebase
 
-1. Run the `repomap_server.py` script:
+## Why PageRank?
 
-```bash
-python repomap_server.py
-```
+Because popularity matters. A file that's imported by 50 other files is probably more important than one imported by 2. PageRank captures this transitive importance—if A imports B and B imports C, then C gets credit for being foundational.
 
-2. The server will start and listen for requests via STDIO.
-3. Other applications can then use the `repo_map` tool provided by the server to generate repository maps. They must specify the `project_root` parameter as an absolute path to the project they want to map.
+We also apply depth-aware personalization:
+- Root-level files: full weight
+- Shallow files (depth ≤ 2): full weight
+- Moderate depth (3-4): 0.5x weight
+- Deep files (5+): 0.1x weight
+- Vendor patterns (`node_modules`, `vendor/`, `torchhub/`): 0.01x weight
 
+But here's the key: this is a *prior*, not a hard rule. If your `vendor/something/critical.py` is genuinely the backbone of your app, the graph structure will override the depth penalty.
 
-## Changelog
+## Caching
 
-7/13/2025 - Removed the project.json dependency. Fixed the MCP server to be a little easier for the LLM to work with in terms of filenames.
+grepmap caches parsed tags in `.grepmap.tags.cache.v{N}/` to avoid re-parsing unchanged files. The cache auto-invalidates when files change (based on mtime).
+
+## Supported Languages
+
+Anything tree-sitter supports:
+
+Python, JavaScript, TypeScript, Rust, Go, C, C++, Java, Ruby, PHP, C#, Kotlin, Swift, Scala, Elixir, Erlang, Haskell, OCaml, Lua, R, Julia, and [many more](https://tree-sitter.github.io/tree-sitter/#available-parsers).
+
+## Origins
+
+grepmap is a spiritual successor to [aider's RepoMap](https://github.com/paul-gauthier/aider). We took the core concept—PageRank over code graphs—and rebuilt it with:
+
+- Cleaner output optimized for AI consumption
+- Depth-aware ranking to handle real-world monorepos
+- Directory topology views for quick orientation
+- MCP server for tool integration
+- Multi-detail rendering (LOW/MEDIUM/HIGH) for token optimization
+
+## License
+
+MIT
+
+---
+
+*"It's like showing Claude the social network of your code."*

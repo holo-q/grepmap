@@ -1,5 +1,5 @@
 """
-RepoMap class for generating repository maps.
+GrepMap class for generating grep maps.
 """
 
 import os
@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import List, Dict, Set, Optional, Tuple, Callable
 import shutil
 import sqlite3
-from utils import Tag, DetailLevel, SignatureInfo, FieldInfo, RenderConfig
+from utils import Tag, DetailLevel, SignatureInfo, FieldInfo
 from dataclasses import dataclass
 import diskcache
 import networkx as nx
@@ -32,14 +32,14 @@ class FileReport:
 # Constants
 CACHE_VERSION = 4  # Bumped for decorator extraction fix (properties now properly detected)
 
-TAGS_CACHE_DIR = f".repomap.tags.cache.v{CACHE_VERSION}"
+TAGS_CACHE_DIR = f".grepmap.tags.cache.v{CACHE_VERSION}"
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError)
 
 # Tag is imported from utils.py and includes parent scope information
 
 
-class RepoMap:
-    """Main class for generating repository maps."""
+class GrepMap:
+    """Main class for generating grep maps."""
     
     def __init__(
         self,
@@ -57,7 +57,7 @@ class RepoMap:
         color: bool = True,
         directory_mode: bool = True
     ):
-        """Initialize RepoMap instance."""
+        """Initialize GrepMap instance."""
         self.map_tokens = map_tokens
         self.max_map_tokens = map_tokens
         self.root = Path(root or os.getcwd()).resolve()
@@ -1546,7 +1546,7 @@ class RepoMap:
 
         return output, file_report
     
-    def get_repo_map(
+    def get_grep_map(
         self,
         chat_files: Optional[List[str]] = None,
         other_files: Optional[List[str]] = None,
@@ -1554,7 +1554,7 @@ class RepoMap:
         mentioned_idents: Optional[Set[str]] = None,
         force_refresh: bool = False
     ) -> Tuple[Optional[str], FileReport]:
-        """Generate the repository map with file report."""
+        """Generate the grep map with file report."""
         if chat_files is None:
             chat_files = []
         if other_files is None:

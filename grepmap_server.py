@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from fastmcp import FastMCP, settings
-from repomap_class import RepoMap
+from grepmap_class import GrepMap
 from utils import count_tokens, read_text
 
 # Helper function from your CLI, useful to have here
@@ -44,10 +44,10 @@ log = logging.getLogger(__name__)
 settings.stateless_http = True
 
 # Create MCP server
-mcp = FastMCP("RepoMapServer")
+mcp = FastMCP("GrepMapServer")
 
 @mcp.tool()
-async def repo_map(
+async def grep_map(
     project_root: str,
     chat_files: Optional[List[str]] = None,
     other_files: Optional[List[str]] = None,
@@ -59,22 +59,22 @@ async def repo_map(
     verbose: bool = False,
     max_context_window: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Generate a repository map for the specified files, providing a list of function prototypes and variables for files as well as relevant related
+    """Generate a grep map for the specified files, providing a list of function prototypes and variables for files as well as relevant related
     files. Provide filenames relative to the project_root. In addition to the files provided, relevant related files will also be included with a
     very small ranking boost.
 
     :param project_root: Root directory of the project to search.  (must be an absolute path!)
     :param chat_files: A list of file paths that are currently in the chat context. These files will receive the highest ranking.
     :param other_files: A list of other relevant file paths in the repository to consider for the map. They receive a lower ranking boost than mentioned_files and chat_files.
-    :param token_limit: The maximum number of tokens the generated repository map should occupy. Defaults to 8192.
+    :param token_limit: The maximum number of tokens the generated grep map should occupy. Defaults to 8192.
     :param exclude_unranked: If True, files with a PageRank of 0.0 will be excluded from the map. Defaults to False.
-    :param force_refresh: If True, forces a refresh of the repository map cache. Defaults to False.
+    :param force_refresh: If True, forces a refresh of the grep map cache. Defaults to False.
     :param mentioned_files: Optional list of file paths explicitly mentioned in the conversation and receive a mid-level ranking boost.
     :param mentioned_idents: Optional list of identifiers explicitly mentioned in the conversation, to boost their ranking.
     :param verbose: If True, enables verbose logging for the RepoMap generation process. Defaults to False.
     :param max_context_window: Optional maximum context window size for token calculation, used to adjust map token limit when no chat files are provided.
     :returns: A dictionary containing:
-        - 'map': the generated repository map string
+        - 'map': the generated grep map string
         - 'report': a dictionary with file processing details including:
             - 'included': list of processed files
             - 'excluded': dictionary of excluded files with reasons
@@ -130,7 +130,7 @@ async def repo_map(
 
     # 4. Instantiate and run RepoMap
     try:
-        repo_mapper = RepoMap(
+        grep_mapper = GrepMap(
             map_tokens=token_limit,
             root=str(root_path),
             token_counter_func=lambda text: count_tokens(text, "gpt-4"),
@@ -146,7 +146,7 @@ async def repo_map(
 
     try:
         map_content, file_report = await asyncio.to_thread(
-            repo_mapper.get_repo_map,
+            grep_mapper.get_grep_map,
             chat_files=abs_chat_files,
             other_files=abs_other_files,
             mentioned_fnames=mentioned_fnames_set,
@@ -163,12 +163,12 @@ async def repo_map(
         }
         
         return {
-            "map": map_content or "No repository map could be generated.",
+            "map": map_content or "No grep map could be generated.",
             "report": report_dict
         }
     except Exception as e:
-        log.exception(f"Error generating repository map for project '{project_root}': {e}")
-        return {"error": f"Error generating repository map: {str(e)}"}
+        log.exception(f"Error generating grep map for project '{project_root}': {e}")
+        return {"error": f"Error generating grep map: {str(e)}"}
     
 @mcp.tool()
 async def search_identifiers(
@@ -198,8 +198,8 @@ async def search_identifiers(
         return {"error": f"Project root directory not found: {project_root}"}
 
     try:
-        # Initialize RepoMap with search-specific settings
-        repo_map = RepoMap(
+        # Initialize GrepMap with search-specific settings
+        grep_map = GrepMap(
             root=project_root,
             token_counter_func=lambda text: count_tokens(text, "gpt-4"),
             file_reader_func=read_text,
@@ -210,12 +210,12 @@ async def search_identifiers(
 
         # Find all source files in the project
         all_files = find_src_files(project_root)
-        
+
         # Get all tags (definitions and references) for all files
         all_tags = []
         for file_path in all_files:
             rel_path = str(Path(file_path).relative_to(project_root))
-            tags = repo_map.get_tags(file_path, rel_path)
+            tags = grep_map.get_tags(file_path, rel_path)
             all_tags.extend(tags)
 
         # Filter tags based on search query and options
@@ -243,8 +243,8 @@ async def search_identifiers(
             start_line = max(1, tag.line - context_lines)
             end_line = tag.line + context_lines
             context_range = list(range(start_line, end_line + 1))
-            
-            context = repo_map.render_tree(
+
+            context = grep_map.render_tree(
                 file_path,
                 tag.rel_fname,
                 context_range

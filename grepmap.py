@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone RepoMap Tool
+Standalone GrepMap Tool
 
 A command-line tool that generates a "map" of a software repository,
 highlighting important files and definitions based on their relevance.
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List
 
 from utils import count_tokens, read_text
-from repomap_class import RepoMap
+from grepmap_class import GrepMap
 
 
 def get_source_dirs_from_pyproject(directory: str) -> List[str]:
@@ -187,7 +187,7 @@ def tool_error(message):
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Generate a repository map showing important code structures.",
+        description="Generate a grep map showing important code structures.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -328,7 +328,7 @@ Examples:
         tool_output(f"Found {len(chat_files)} chat files, {len(other_files)} other files")
 
     # Auto-detect root if not explicitly provided and files are from outside current directory
-    # This ensures that when you run "repomap /some/other/path/file.py" it automatically
+    # This ensures that when you run "grepmap /some/other/path/file.py" it automatically
     # uses the correct repository root instead of the current directory
     if args.root == "." and (chat_files or other_files):
         all_files = chat_files + other_files
@@ -371,7 +371,7 @@ Examples:
     # Clear cache if requested
     if args.clear_cache:
         import shutil
-        from repomap_class import CACHE_VERSION
+        from grepmap_class import CACHE_VERSION
         cache_dir = root_path / f".repomap.tags.cache.v{CACHE_VERSION}"
         if cache_dir.exists():
             shutil.rmtree(cache_dir)
@@ -392,8 +392,8 @@ Examples:
         if total_files == 1:
             use_directory_mode = False
 
-    # Create RepoMap instance
-    repo_map = RepoMap(
+    # Create GrepMap instance
+    grep_map = GrepMap(
         map_tokens=args.map_tokens,
         root=str(root_path),
         token_counter_func=token_counter,
@@ -408,7 +408,7 @@ Examples:
     
     # Generate the map
     try:
-        map_content, file_report = repo_map.get_repo_map(
+        map_content, file_report = grep_map.get_grep_map(
             chat_files=chat_files,
             other_files=other_files,
             mentioned_fnames=mentioned_fnames,
@@ -418,18 +418,18 @@ Examples:
 
         if map_content:
             if args.verbose:
-                tokens = repo_map.token_count(map_content)
+                tokens = grep_map.token_count(map_content)
                 tool_output(f"Generated map: {len(map_content)} chars, ~{tokens} tokens")
             
             print(map_content)
         else:
-            tool_output("No repository map generated.")
+            tool_output("No grep map generated.")
             
     except KeyboardInterrupt:
         tool_error("Interrupted by user")
         sys.exit(1)
     except Exception as e:
-        tool_error(f"Error generating repository map: {e}")
+        tool_error(f"Error generating grep map: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()

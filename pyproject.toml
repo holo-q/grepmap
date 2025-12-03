@@ -3,9 +3,27 @@ requires = ["setuptools>=69.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "repomapper"
+name = "grepmap"
 version = "0.1.0"
-requires-python = ">=3.13"
+description = "AI-powered codebase navigator using PageRank and tree-sitter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "holo-q", email = ""}
+]
+keywords = ["code-navigation", "ai", "llm", "tree-sitter", "pagerank", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Linguistic",
+]
 dependencies = [
     "diskcache>=5.6.0",
     "fastmcp>=2.11.3",
@@ -19,9 +37,14 @@ dependencies = [
     "tree-sitter>=0.20.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/holo-q/grepmap/"
+Repository = "https://github.com/holo-q//grepmap"
+Issues = "https://github.com/holo-q/grepmap/issues"
+
 [project.scripts]
-repomap = "repomap:main"
-repomap-mcp = "repomap_server:main"
+grepmap = "grepmap:main"
+grepmap-mcp = "grepmap_server:main"
 
 [tool.setuptools]
-py-modules = ["repomap_server", "repomap", "repomap_class", "utils", "importance", "scm"]
+py-modules = ["grepmap_server", "grepmap", "grepmap_class", "utils", "importance", "scm"]

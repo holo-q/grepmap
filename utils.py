@@ -45,7 +45,7 @@ class SignatureInfo:
     return_type: Optional[str]
     decorators: Tuple[str, ...]  # ("staticmethod", "property", ...)
 
-    def render(self, detail: DetailLevel, seen_patterns: set = None) -> str:
+    def render(self, detail: DetailLevel, seen_patterns: Optional[set] = None) -> str:
         """Render signature at specified detail level with optional deduplication.
 
         Args:
