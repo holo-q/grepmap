@@ -1134,41 +1134,74 @@ class RepoMap:
 
         return name
 
+    def _render_symbol_list(
+        self,
+        console: Console,
+        tags_list: List[Tag],
+        detail_level: DetailLevel,
+        seen_patterns: set,
+        prefix: str,
+        term_width: int,
+        color: str
+    ) -> None:
+        """Render a list of symbols with wrapping, used for methods/functions/constants."""
+        if not tags_list:
+            return
+
+        line = Text()
+        line.append(prefix, style="dim white")
+        current_length = len(prefix)
+
+        for i, tag in enumerate(tags_list):
+            display = self.render_symbol(tag, detail_level, seen_patterns)
+            sep = ", " if i > 0 else ""
+            item_len = len(sep) + len(display)
+
+            # Wrap if needed
+            if i > 0 and current_length + item_len > term_width - 5:
+                console.print(line, no_wrap=True)
+                line = Text()
+                line.append(prefix, style="dim white")
+                current_length = len(prefix)
+                sep = ""
+
+            if sep:
+                line.append(sep, style="dim white")
+            line.append(display, style=color)
+            current_length += item_len
+
+        if line:
+            console.print(line, no_wrap=True)
+
     def to_directory_overview(
         self,
         tags: List[Tuple[float, Tag]],
         chat_rel_fnames: Set[str],
         detail_level: DetailLevel = DetailLevel.LOW
     ) -> str:
-        """Convert ranked tags to compact directory overview format.
+        """Convert ranked tags to hierarchical directory overview format.
 
-        Shows files with their symbols in a condensed format using icons.
-        Uses heuristics to choose between single-line, multi-line, or single-class format.
+        Shows files with their symbols in a topology-preserving format:
+        - Classes shown with their methods indented underneath
+        - Top-level functions shown separately
+        - Constants/variables shown at the end
 
-        Detail levels control how much signature info is shown:
-        - LOW: Symbol names only (default, most compact)
-        - MEDIUM: Names with simplified parameter names
-        - HIGH: Full signatures with types
-
-        Smart deduplication: At HIGH detail, repeated parameter patterns like
-        `hobo: HoboWindow` are shown once, then just `hobo` for subsequent uses.
+        This maximizes topological signal for orientation in the codebase.
         """
         if not tags:
             return ""
 
         from io import StringIO
         string_io = StringIO()
-        # Use very large width to prevent Rich's automatic wrapping - we handle wrapping manually
         console = Console(file=string_io, force_terminal=True, width=999999)
 
         # Per-file seen pattern tracking for smart deduplication
-        # Key: rel_fname, Value: set of "param_name:type" patterns already shown
         seen_patterns: Dict[str, set] = defaultdict(set)
 
         # Group tags by file
-        file_tags = defaultdict(list)
+        file_tags: Dict[str, List[Tuple[float, Tag]]] = defaultdict(list)
         for rank, tag in tags:
-            if tag.kind == 'def':  # Only include definitions
+            if tag.kind == 'def':
                 file_tags[tag.rel_fname].append((rank, tag))
 
         # Sort files by importance
@@ -1178,134 +1211,79 @@ class RepoMap:
             reverse=True
         )
 
-        # Get terminal width for line-fitting heuristic
         import shutil
         term_width = shutil.get_terminal_size().columns
 
         for rel_fname, file_tag_list in sorted_files:
-            # Calculate max rank for this file for verbose logging
-            max_rank = max(rank for rank, tag in file_tag_list)
-
             if self.verbose:
+                max_rank = max(rank for rank, tag in file_tag_list)
                 self.output_handlers['info'](f"  {rel_fname}: rank={max_rank:.4f}")
 
-            # Get per-file seen patterns for dedup
             file_seen = seen_patterns[rel_fname]
 
-            # Group tags by type (keep full tag for signature rendering)
-            grouped: Dict[str, List[Tag]] = defaultdict(list)
+            # Separate tags into categories
+            classes: List[Tag] = []
+            methods_by_class: Dict[str, List[Tag]] = defaultdict(list)
+            top_level_funcs: List[Tag] = []
+            constants: List[Tag] = []
+
             for rank, tag in file_tag_list:
-                grouped[tag.node_type].append(tag)
+                if tag.node_type == 'class':
+                    classes.append(tag)
+                elif tag.node_type == 'function':
+                    if tag.parent_name:
+                        # Nested function or method - group under parent
+                        methods_by_class[tag.parent_name].append(tag)
+                    else:
+                        top_level_funcs.append(tag)
+                elif tag.node_type == 'method':
+                    if tag.parent_name:
+                        methods_by_class[tag.parent_name].append(tag)
+                    else:
+                        top_level_funcs.append(tag)
+                elif tag.node_type in ('constant', 'variable'):
+                    constants.append(tag)
 
-            # Apply heuristics to choose display format
-            total_symbols = sum(len(tags_list) for tags_list in grouped.values())
-            num_classes = len(grouped.get('class', []))
-            num_methods = len(grouped.get('method', []))
+            # File header
+            text = Text()
+            text.append(f"{rel_fname}:", style="bold blue")
+            console.print(text, no_wrap=True)
 
-            # Calculate estimated line length for single-line format
-            # At LOW detail, just use names; at higher detail, estimate longer strings
-            all_tags_flat = [t for tags_list in grouped.values() for t in tags_list]
-            if detail_level == DetailLevel.LOW:
-                estimated_length = len(rel_fname) + 2 + sum(len(t.name) for t in all_tags_flat) + (len(all_tags_flat) - 1) * 2
-            else:
-                # Higher detail levels produce longer output - estimate conservatively
-                estimated_length = term_width  # Force multi-line for detail
-
-            # Heuristic 1: Single class with methods -> special format
-            if num_classes == 1 and num_methods > 0 and total_symbols < 15:
-                class_tag = grouped['class'][0]
-                method_tags = grouped.get('method', [])
-
-                text = Text()
-                text.append(f"{rel_fname}: ", style="bold blue")
-                text.append("class ", style="bold magenta")
+            # Render classes with their methods
+            for class_tag in classes:
                 class_display = self.render_symbol(class_tag, detail_level, file_seen)
-                text.append(class_display, style="bold cyan")
-                text.append(": ", style="dim white")
+                line = Text()
+                line.append("  class ", style="magenta")
+                line.append(class_display, style="bold cyan")
 
-                for i, method_tag in enumerate(method_tags):
-                    if i > 0:
-                        text.append(", ", style="dim white")
-                    method_display = self.render_symbol(method_tag, detail_level, file_seen)
-                    text.append(method_display, style="yellow")
+                # Get methods for this class
+                class_methods = methods_by_class.get(class_tag.name, [])
+                if class_methods:
+                    line.append(":", style="dim white")
+                console.print(line, no_wrap=True)
 
-                console.print(text, no_wrap=True)
+                # Render methods indented under the class
+                if class_methods:
+                    self._render_symbol_list(
+                        console, class_methods, detail_level, file_seen,
+                        prefix="    ", term_width=term_width, color="yellow"
+                    )
 
-            # Heuristic 2: Fits on one line -> single line format
-            elif estimated_length < term_width * 0.8:  # Use 80% of terminal width as threshold
-                all_symbols = []
-                for node_type, tags_list in sorted(grouped.items()):
-                    for tag in tags_list:
-                        all_symbols.append((node_type, tag))
+            # Render top-level functions
+            if top_level_funcs:
+                console.print(Text("  def:", style="magenta"), no_wrap=True)
+                self._render_symbol_list(
+                    console, top_level_funcs, detail_level, file_seen,
+                    prefix="    ", term_width=term_width, color="green"
+                )
 
-                # Build the output with manual wrapping and indentation
-                prefix = f"{rel_fname}: "
-                indent = " " * len(prefix)
-
-                text = Text()
-                text.append(prefix, style="bold blue")
-
-                current_line_length = len(prefix)
-                for i, (node_type, tag) in enumerate(all_symbols):
-                    display_name = self.render_symbol(tag, detail_level, file_seen)
-                    separator = ", " if i > 0 else ""
-                    item_length = len(separator) + len(display_name)
-
-                    # Check if we need to wrap
-                    if i > 0 and current_line_length + item_length > term_width - 5:
-                        text.append("\n" + indent)
-                        current_line_length = len(indent)
-                        separator = ""
-
-                    if separator:
-                        text.append(separator, style="dim white")
-                    color = self.get_symbol_color(node_type)
-                    text.append(display_name, style=color)
-                    current_line_length += item_length
-
-                console.print(text, no_wrap=True)
-
-            # Heuristic 3: Many symbols -> multi-line grouped
-            else:
-                # File name header
-                text = Text()
-                text.append(f"{rel_fname}:", style="bold blue")
-                console.print(text, no_wrap=True)
-
-                # Group and display by type
-                for node_type in ['class', 'function', 'method', 'variable', 'constant']:
-                    if node_type not in grouped:
-                        continue
-
-                    tags_list = grouped[node_type]
-                    icon = self.get_symbol_icon(node_type)
-                    color = self.get_symbol_color(node_type)
-
-                    # Calculate indentation for wrapped lines
-                    prefix = f"  {icon}"
-                    indent = " " * len(prefix)
-
-                    line = Text()
-                    line.append(prefix, style=color)
-
-                    current_line_length = len(prefix)
-                    for i, tag in enumerate(tags_list):
-                        display_name = self.render_symbol(tag, detail_level, file_seen)
-                        separator = ", " if i > 0 else ""
-                        item_length = len(separator) + len(display_name)
-
-                        # Check if we need to wrap
-                        if i > 0 and current_line_length + item_length > term_width - 5:
-                            line.append("\n" + indent)
-                            current_line_length = len(indent)
-                            separator = ""
-
-                        if separator:
-                            line.append(separator, style="dim white")
-                        line.append(display_name, style=color)
-                        current_line_length += item_length
-
-                    console.print(line, no_wrap=True)
+            # Render constants
+            if constants:
+                console.print(Text("  const:", style="magenta"), no_wrap=True)
+                self._render_symbol_list(
+                    console, constants, detail_level, file_seen,
+                    prefix="    ", term_width=term_width, color="bright_green"
+                )
 
         # Add summary section: other files and classes in the project
         shown_files = set(rel_fname for rel_fname, _ in sorted_files)
@@ -1473,12 +1451,9 @@ class RepoMap:
     ) -> Tuple[Optional[str], FileReport]:
         """Generate the ranked tags map without caching.
 
-        Uses multi-configuration optimization to find the best combination of
-        tag count and detail level that fits within the token budget while
-        maximizing information content.
-
-        The optimizer tries configs in descending score order (coverage * 10 + detail)
-        which prioritizes more tags over higher detail levels.
+        Uses binary search per detail level to find optimal tag count, then
+        picks the configuration with highest score (coverage * 10 + detail).
+        This ensures we maximize file coverage before adding signature detail.
         """
         ranked_tags, file_report = self.get_ranked_tags(
             chat_fnames, other_fnames, mentioned_fnames, mentioned_idents
@@ -1490,70 +1465,69 @@ class RepoMap:
         chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
         n = len(ranked_tags)
 
-        # Generate configuration space: various tag counts × detail levels
-        # More granular tag counts for better optimization
-        tag_counts = sorted(set([
-            n,
-            int(n * 0.9),
-            int(n * 0.75),
-            int(n * 0.5),
-            int(n * 0.25),
-            min(n, 50),
-            min(n, 25),
-            min(n, 10)
-        ]), reverse=True)
-        tag_counts = [c for c in tag_counts if c > 0]
-
         # For non-directory mode, only use LOW detail (tree view handles its own formatting)
         if self.directory_mode:
-            detail_levels = [DetailLevel.HIGH, DetailLevel.MEDIUM, DetailLevel.LOW]
+            detail_levels = [DetailLevel.LOW, DetailLevel.MEDIUM, DetailLevel.HIGH]
         else:
             detail_levels = [DetailLevel.LOW]
 
-        # Create all configs and sort by score (descending)
-        configs = [RenderConfig(num_tags=c, detail_level=d)
-                   for c in tag_counts for d in detail_levels]
-        configs.sort(key=lambda x: x.score, reverse=True)
+        def try_render(num_tags: int, detail: DetailLevel) -> Tuple[Optional[str], int]:
+            """Try rendering with given config, return (output, tokens)."""
+            if num_tags <= 0:
+                return None, 0
+            selected = ranked_tags[:num_tags]
+            if self.directory_mode:
+                output = self.to_directory_overview(selected, chat_rel_fnames, detail)
+            else:
+                output = self.to_tree(selected, chat_rel_fnames)
+            if not output:
+                return None, 0
+            return output, self.token_count(output)
+
+        # Binary search for each detail level to find max tags that fit
+        best_configs: List[Tuple[int, DetailLevel, str, int]] = []  # (num_tags, detail, output, tokens)
+
+        for detail in detail_levels:
+            left, right = 1, n
+            best_for_detail = None
+
+            while left <= right:
+                mid = (left + right) // 2
+                output, tokens = try_render(mid, detail)
+
+                if output and tokens <= max_map_tokens:
+                    best_for_detail = (mid, detail, output, tokens)
+                    left = mid + 1  # Try more tags
+                else:
+                    right = mid - 1  # Try fewer tags
+
+            if best_for_detail:
+                best_configs.append(best_for_detail)
+
+        if not best_configs:
+            # Fallback: minimal output
+            if self.verbose:
+                self.output_handlers['info']("Using minimal fallback output")
+            minimal_tags = ranked_tags[:min(10, n)]
+            if self.directory_mode:
+                return self.to_directory_overview(
+                    minimal_tags, chat_rel_fnames, DetailLevel.LOW
+                ), file_report
+            else:
+                return self.to_tree(minimal_tags, chat_rel_fnames), file_report
+
+        # Pick config with highest score: num_tags * 10 + detail_level
+        # This strongly favors coverage over detail
+        best = max(best_configs, key=lambda x: x[0] * 10 + x[1].value)
+        num_tags, detail, output, tokens = best
 
         if self.verbose:
             self.output_handlers['info'](
-                f"Optimizing: {len(configs)} configs, {n} total tags, {max_map_tokens} token budget"
+                f"Selected: {num_tags} tags, {detail.name} detail, {tokens} tokens "
+                f"(from {len(best_configs)} candidates)"
             )
 
-        # Try each config in score order, return first that fits
-        for config in configs:
-            selected_tags = ranked_tags[:config.num_tags]
-
-            if self.directory_mode:
-                tree_output = self.to_directory_overview(
-                    selected_tags, chat_rel_fnames, config.detail_level
-                )
-            else:
-                tree_output = self.to_tree(selected_tags, chat_rel_fnames)
-
-            if not tree_output:
-                continue
-
-            tokens = self.token_count(tree_output)
-            if tokens <= max_map_tokens:
-                if self.verbose:
-                    detail_name = config.detail_level.name
-                    self.output_handlers['info'](
-                        f"Selected: {config.num_tags} tags, {detail_name} detail, {tokens} tokens"
-                    )
-                return tree_output, file_report
-
-        # Fallback: minimal output if nothing fits
-        if self.verbose:
-            self.output_handlers['info']("Using minimal fallback output")
-
-        minimal_tags = ranked_tags[:min(10, n)]
-        if self.directory_mode:
-            return self.to_directory_overview(
-                minimal_tags, chat_rel_fnames, DetailLevel.LOW
-            ), file_report
-        else:
-            return self.to_tree(minimal_tags, chat_rel_fnames), file_report
+        return output, file_report
     
     def get_repo_map(
         self,
