@@ -1219,7 +1219,8 @@ class RepoMap:
         self,
         tags: List[Tuple[float, Tag]],
         chat_rel_fnames: Set[str],
-        detail_level: DetailLevel = DetailLevel.LOW
+        detail_level: DetailLevel = DetailLevel.LOW,
+        overflow_tags: Optional[List[Tuple[float, Tag]]] = None
     ) -> str:
         """Convert ranked tags to hierarchical directory overview format.
 
@@ -1227,6 +1228,12 @@ class RepoMap:
         - Classes shown with their methods indented underneath
         - Top-level functions shown separately
         - Constants/variables shown at the end
+
+        Args:
+            tags: Primary ranked tags for detailed display
+            chat_rel_fnames: Files currently in chat context
+            detail_level: How much signature detail to show
+            overflow_tags: Additional tags beyond the detailed view, shown at lower resolution
 
         This maximizes topological signal for orientation in the codebase.
         """
@@ -1358,130 +1365,69 @@ class RepoMap:
                     prefix="    ", term_width=term_width, color="bright_green"
                 )
 
-        # Add summary section: other files and classes in the project
-        shown_files = set(rel_fname for rel_fname, _ in sorted_files)
-        all_files = set(tag.rel_fname for _, tag in tags)
-        other_files = sorted(all_files - shown_files)
+        # Low-resolution summary: show overflow tags (files beyond the detailed view)
+        # This extends orientation at reduced fidelity
+        if overflow_tags:
+            shown_files = set(rel_fname for rel_fname, _ in sorted_files)
 
-        # Collect all classes
-        # TODO: Future enhancement - extract inheritance hierarchies and type annotations
-        # from tree-sitter to build class hierarchy graph and show parent/child relationships
-        all_classes = set()
-        class_to_file = {}
-        for _, tag in tags:
-            if tag.node_type == 'class' and tag.kind == 'def':
-                all_classes.add(tag.name)
-                if tag.name not in class_to_file:
-                    class_to_file[tag.name] = tag.rel_fname
-
-        if other_files or all_classes:
-            console.print("")  # Blank line
-            console.print(Text("═" * 80, style="dim"))
-
-        # Show other files (not detailed above)
-        if other_files:
-            console.print(Text("\nOther files in project:", style="bold yellow"))
-            # Show in columns
-            files_per_line = 3
-            for i in range(0, len(other_files), files_per_line):
-                line_files = other_files[i:i + files_per_line]
-                text = Text("  ")
-                for j, fname in enumerate(line_files):
-                    if j > 0:
-                        text.append(" │ ", style="dim")
-                    text.append(fname, style="cyan")
-                console.print(text, no_wrap=True)
-
-        # Show all classes in a tree structure organized by directory hierarchy
-        # Clean indentation without tree line characters to maximize signal
-        if all_classes:
-            console.print(Text("\nClasses in project:", style="bold yellow"))
-
-            # Build a tree structure: path components -> file -> classes
-            file_to_classes = defaultdict(list)
-            for cls in all_classes:
-                file_to_classes[class_to_file[cls]].append(cls)
-
-            # Build directory tree
-            tree = {}
-            for file_path in sorted(file_to_classes.keys()):
-                parts = file_path.split('/')
-                tree_key = '/'.join(parts[:-1]) if len(parts) > 1 else ''
-                filename = parts[-1]
-                if tree_key not in tree:
-                    tree[tree_key] = {}
-                tree[tree_key][filename] = sorted(file_to_classes[file_path])
-
-            # Build directory hierarchy
-            all_dirs = set()
-            for file_path in file_to_classes.keys():
-                parts = file_path.split('/')
-                if len(parts) > 1:
-                    for i in range(1, len(parts)):
-                        all_dirs.add('/'.join(parts[:i]))
-
-            sorted_dirs = sorted(all_dirs, key=lambda d: (d.count('/'), d))
-            rendered = set()
-
-            def render_directory_tree(dir_path, depth=0):
-                """Render a directory and all its subdirectories/files with clean indentation."""
-                if dir_path in rendered:
-                    return
-                rendered.add(dir_path)
-
-                parts = dir_path.split('/')
-                dir_name = parts[-1]
-                indent = "  " * depth
-
-                # Find immediate children (subdirs and files)
-                children_dirs = []
-                for d in sorted_dirs:
-                    if d.startswith(dir_path + '/') and d.count('/') == dir_path.count('/') + 1:
-                        children_dirs.append(d)
-
-                # Show directory name
-                dir_text = Text(indent)
-                dir_text.append(dir_name + "/", style="bold blue")
-                console.print(dir_text, no_wrap=True)
-
-                # Render files in this directory
-                if dir_path in tree:
-                    files = tree[dir_path]
-                    for filename, classes in sorted(files.items()):
-                        file_text = Text("  " * (depth + 1))
-                        file_text.append(filename, style="yellow")
-                        file_text.append(": ", style="dim")
-
-                        # Format classes
-                        if len(classes) <= 3:
-                            file_text.append(", ".join(classes), style="cyan")
+            # Collect ALL definitions from overflow, organized by file
+            overflow_by_file: Dict[str, Dict[str, List[str]]] = defaultdict(
+                lambda: {'classes': [], 'funcs': [], 'methods': [], 'const': []}
+            )
+            for _, tag in overflow_tags:
+                if tag.kind == 'def' and tag.rel_fname not in shown_files:
+                    if tag.node_type == 'class':
+                        overflow_by_file[tag.rel_fname]['classes'].append(tag.name)
+                    elif tag.node_type == 'function':
+                        if tag.parent_name:
+                            overflow_by_file[tag.rel_fname]['methods'].append(tag.name)
                         else:
-                            file_text.append(", ".join(classes[:3]), style="cyan")
-                            file_text.append(f", +{len(classes)-3} more", style="dim")
+                            overflow_by_file[tag.rel_fname]['funcs'].append(tag.name)
+                    elif tag.node_type in ('constant', 'variable'):
+                        overflow_by_file[tag.rel_fname]['const'].append(tag.name)
 
-                        console.print(file_text, no_wrap=True)
+            if overflow_by_file:
+                console.print("")  # Blank line
+                console.print(Text("── Also in scope ──", style="dim yellow"))
 
-                # Recursively render subdirectories
-                for subdir in children_dirs:
-                    render_directory_tree(subdir, depth + 1)
+                # Sort by total symbols, limit display
+                sorted_overflow = sorted(
+                    overflow_by_file.items(),
+                    key=lambda x: (
+                        len(x[1]['classes']) * 3 +  # Weight classes highest
+                        len(x[1]['funcs']) * 2 +
+                        len(x[1]['methods']) +
+                        len(x[1]['const'])
+                    ),
+                    reverse=True
+                )[:30]
 
-            # Render root-level files first
-            if '' in tree:
-                for filename, classes in sorted(tree[''].items()):
-                    file_text = Text("  ")
-                    file_text.append(filename, style="yellow")
-                    file_text.append(": ", style="dim")
-                    if len(classes) <= 3:
-                        file_text.append(", ".join(classes), style="cyan")
-                    else:
-                        file_text.append(", ".join(classes[:3]), style="cyan")
-                        file_text.append(f", +{len(classes)-3} more", style="dim")
-                    console.print(file_text, no_wrap=True)
+                for rel_fname, symbols in sorted_overflow:
+                    line = Text("  ")
+                    line.append(rel_fname, style="dim cyan")
+                    line.append(": ", style="dim")
 
-            # Render top-level directories
-            top_level_dirs = [d for d in sorted_dirs if '/' not in d]
-            for top_dir in sorted(top_level_dirs):
-                render_directory_tree(top_dir, depth=1)
+                    parts = []
+                    if symbols['classes']:
+                        classes = sorted(symbols['classes'])
+                        if len(classes) <= 3:
+                            parts.append(", ".join(classes))
+                        else:
+                            parts.append(f"{', '.join(classes[:3])} +{len(classes)-3}")
+
+                    # Summarize other symbols
+                    counts = []
+                    if symbols['funcs']:
+                        counts.append(f"{len(symbols['funcs'])}f")
+                    if symbols['methods']:
+                        counts.append(f"{len(symbols['methods'])}m")
+                    if symbols['const']:
+                        counts.append(f"{len(symbols['const'])}c")
+                    if counts:
+                        parts.append(" ".join(counts))
+
+                    line.append(", ".join(parts) if parts else "...", style="dim white")
+                    console.print(line, no_wrap=True)
 
         return string_io.getvalue().rstrip()
 
@@ -1599,6 +1545,15 @@ class RepoMap:
                 f"Selected: {num_tags} tags, {detail.name} detail, {tokens} tokens "
                 f"(from {len(best_configs)} candidates)"
             )
+
+        # Re-render with overflow tags for the low-res "also in scope" section
+        # Take a large slice of remaining tags to find ~30 additional files
+        if self.directory_mode and num_tags < n:
+            # Use remaining tags up to 2000 more, or all if less
+            overflow_count = min(2000, n - num_tags)
+            overflow = ranked_tags[num_tags:num_tags + overflow_count]
+            selected = ranked_tags[:num_tags]
+            output = self.to_directory_overview(selected, chat_rel_fnames, detail, overflow_tags=overflow)
 
         return output, file_report
     
