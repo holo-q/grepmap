@@ -5,7 +5,7 @@ Utility functions for RepoMap.
 import sys
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional, Tuple, NamedTuple
+from typing import Optional, Tuple
 from dataclasses import dataclass
 
 try:
@@ -132,10 +132,14 @@ class RenderConfig:
 # Tag Structure (Extended with Optional Signature/Field Info)
 # =============================================================================
 
-class Tag(NamedTuple):
+@dataclass(frozen=True)
+class Tag:
     """Tag for storing parsed code definitions and references.
 
-    Fields:
+    Immutable dataclass representing a code symbol (definition or reference)
+    with metadata for ranking, filtering, and multi-detail rendering.
+
+    Attributes:
         rel_fname: Relative filename for display
         fname: Absolute filename for I/O
         line: Line number of definition
@@ -157,6 +161,21 @@ class Tag(NamedTuple):
     parent_line: Optional[int]
     signature: Optional[SignatureInfo] = None
     fields: Optional[Tuple[FieldInfo, ...]] = None
+
+
+@dataclass(frozen=True)
+class RankedTag:
+    """A Tag with its PageRank score for importance-based sorting.
+
+    Used throughout the system to represent ranked tags in lists.
+    Replaces the previous Tuple[float, Tag] pattern for type clarity.
+
+    Attributes:
+        rank: PageRank score (0.0-1.0, higher = more important)
+        tag: The code symbol tag
+    """
+    rank: float
+    tag: Tag
 
 
 def count_tokens(text: str, model_name: str = "gpt-4") -> int:

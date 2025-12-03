@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import List, Dict, Set, Optional, Tuple, Callable
 import shutil
 import sqlite3
-from utils import Tag, DetailLevel, SignatureInfo, FieldInfo
+from utils import Tag, RankedTag, DetailLevel, SignatureInfo, FieldInfo
 from dataclasses import dataclass
 import diskcache
 import networkx as nx
@@ -30,7 +30,7 @@ class FileReport:
 
 
 # Constants
-CACHE_VERSION = 4  # Bumped for decorator extraction fix (properties now properly detected)
+CACHE_VERSION = 5  # Bumped for Tag conversion from NamedTuple to frozen dataclass
 
 TAGS_CACHE_DIR = f".grepmap.tags.cache.v{CACHE_VERSION}"
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError)
@@ -514,7 +514,7 @@ class GrepMap:
         other_fnames: List[str],
         mentioned_fnames: Optional[Set[str]] = None,
         mentioned_idents: Optional[Set[str]] = None
-    ) -> Tuple[List[Tuple[float, Tag]], FileReport]:
+    ) -> Tuple[List[RankedTag], FileReport]:
         """Get ranked tags using PageRank algorithm with file report."""
         # Return empty list and empty report if no files
         if not chat_fnames and not other_fnames:
@@ -710,10 +710,10 @@ class GrepMap:
                         boost *= 20.0
                     
                     final_rank = file_rank * boost
-                    ranked_tags.append((final_rank, tag))
+                    ranked_tags.append(RankedTag(final_rank, tag))
         
         # Sort by rank (descending)
-        ranked_tags.sort(key=lambda x: x[0], reverse=True)
+        ranked_tags.sort(key=lambda x: x.rank, reverse=True)
 
         return ranked_tags, file_report
 
@@ -1049,20 +1049,20 @@ class GrepMap:
 
             return "\n".join(result_lines)
     
-    def to_tree(self, tags: List[Tuple[float, Tag]], chat_rel_fnames: Set[str]) -> str:
+    def to_tree(self, tags: List[RankedTag], chat_rel_fnames: Set[str]) -> str:
         """Convert ranked tags to formatted tree output."""
         if not tags:
             return ""
         
         # Group tags by file
         file_tags = defaultdict(list)
-        for rank, tag in tags:
-            file_tags[tag.rel_fname].append((rank, tag))
+        for rt in tags:
+            file_tags[rt.tag.rel_fname].append(rt)
         
         # Sort files by importance (max rank of their tags)
         sorted_files = sorted(
             file_tags.items(),
-            key=lambda x: max(rank for rank, tag in x[1]),
+            key=lambda x: max(rt.rank for rt in x[1]),
             reverse=True
         )
         
@@ -1070,14 +1070,14 @@ class GrepMap:
         
         for rel_fname, file_tag_list in sorted_files:
             # Get lines of interest and tags
-            lois = [tag.line for rank, tag in file_tag_list]
-            file_tags_only = [tag for rank, tag in file_tag_list]
+            lois = [rt.tag.line for rt in file_tag_list]
+            file_tags_only = [rt.tag for rt in file_tag_list]
 
             # Find absolute filename
             abs_fname = str(self.root / rel_fname)
 
             # Get the max rank for the file
-            max_rank = max(rank for rank, tag in file_tag_list)
+            max_rank = max(rt.rank for rt in file_tag_list)
 
             # Render the tree for this file (pass tags for semantic coloring)
             rendered = self.render_tree(abs_fname, rel_fname, lois, file_tags_only)
@@ -1207,10 +1207,10 @@ class GrepMap:
 
     def to_directory_overview(
         self,
-        tags: List[Tuple[float, Tag]],
+        tags: List[RankedTag],
         chat_rel_fnames: Set[str],
         detail_level: DetailLevel = DetailLevel.LOW,
-        overflow_tags: Optional[List[Tuple[float, Tag]]] = None
+        overflow_tags: Optional[List[RankedTag]] = None
     ) -> str:
         """Convert ranked tags to hierarchical directory overview format.
 
@@ -1238,15 +1238,15 @@ class GrepMap:
         seen_patterns: Dict[str, set] = defaultdict(set)
 
         # Group tags by file
-        file_tags: Dict[str, List[Tuple[float, Tag]]] = defaultdict(list)
-        for rank, tag in tags:
-            if tag.kind == 'def':
-                file_tags[tag.rel_fname].append((rank, tag))
+        file_tags: Dict[str, List[RankedTag]] = defaultdict(list)
+        for rt in tags:
+            if rt.tag.kind == 'def':
+                file_tags[rt.tag.rel_fname].append(rt)
 
         # Sort files by importance
         sorted_files = sorted(
             file_tags.items(),
-            key=lambda x: max(rank for rank, tag in x[1]),
+            key=lambda x: max(rt.rank for rt in x[1]),
             reverse=True
         )
 
@@ -1255,7 +1255,7 @@ class GrepMap:
 
         for rel_fname, file_tag_list in sorted_files:
             if self.verbose:
-                max_rank = max(rank for rank, tag in file_tag_list)
+                max_rank = max(rt.rank for rt in file_tag_list)
                 self.output_handlers['info'](f"  {rel_fname}: rank={max_rank:.4f}")
 
             file_seen = seen_patterns[rel_fname]
@@ -1266,7 +1266,8 @@ class GrepMap:
             top_level_funcs: List[Tag] = []
             constants: List[Tag] = []
 
-            for rank, tag in file_tag_list:
+            for rt in file_tag_list:
+                tag = rt.tag
                 if tag.node_type == 'class':
                     classes.append(tag)
                 elif tag.node_type == 'function':
@@ -1363,7 +1364,8 @@ class GrepMap:
             overflow_by_file: Dict[str, Dict[str, List[str]]] = defaultdict(
                 lambda: {'classes': [], 'funcs': [], 'methods': [], 'const': []}
             )
-            for _, tag in overflow_tags:
+            for rt in overflow_tags:
+                tag = rt.tag
                 if tag.kind == 'def' and tag.rel_fname not in shown_files:
                     if tag.node_type == 'class':
                         overflow_by_file[tag.rel_fname]['classes'].append(tag.name)
