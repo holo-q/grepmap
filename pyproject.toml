@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "holo-q", email = ""}
+    {name = "holo-q"}
 ]
 keywords = ["code-navigation", "ai", "llm", "tree-sitter", "pagerank", "mcp"]
 classifiers = [
@@ -39,7 +39,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/holo-q/grepmap/"
-Repository = "https://github.com/holo-q//grepmap"
+Repository = "https://github.com/holo-q/grepmap"
 Issues = "https://github.com/holo-q/grepmap/issues"
 
 [project.scripts]
