@@ -220,14 +220,26 @@ class TreeRenderer:
                     indent_level = depth_map.get(loi, 0)
                     indent = "    " * indent_level  # 4 spaces per level
 
+                    # Check if we should strip trailing colon for this line
+                    tag = line_to_tag.get(loi)
+                    should_strip_colon = tag and tag.node_type in ('function', 'method', 'class')
+
                     if tree:
                         # Use tree-sitter for granular token coloring
                         rich_line = self._colorize_line_with_tree_sitter(
                             loi, line_text, tree, code, indent
                         )
+
+                        # Strip trailing colon from function/class definitions to save tokens
+                        # Must be done AFTER colorization since colorizer uses original source
+                        if should_strip_colon:
+                            rich_line = self._strip_trailing_colon(rich_line)
+
                         console.print(rich_line)
                     else:
                         # Fallback to simple coloring
+                        if should_strip_colon:
+                            line_text = line_text.rstrip(':').rstrip()
                         line_output = f"{loi:4d}: {indent}{line_text}"
                         console.print(line_output, style="white")
 
@@ -256,6 +268,52 @@ class TreeRenderer:
                     result_lines.append(f"{loi:4d}: {lines[loi-1]}")
 
             return "\n".join(result_lines)
+
+    def _strip_trailing_colon(self, rich_text: Text) -> Text:
+        """Remove trailing colon and whitespace from a Rich Text object.
+
+        Args:
+            rich_text: Rich Text object with potential trailing colon
+
+        Returns:
+            New Rich Text object with trailing colon removed
+        """
+        # Convert to plain text to check for trailing colon
+        plain = rich_text.plain
+        if not plain.rstrip().endswith(':'):
+            return rich_text
+
+        # Find the last non-whitespace character position
+        stripped_plain = plain.rstrip()
+        if not stripped_plain.endswith(':'):
+            return rich_text
+
+        # Build new text without the trailing colon
+        new_text = Text()
+        target_len = len(stripped_plain) - 1  # Remove the colon
+
+        # Walk through spans and copy up to target length
+        current_pos = 0
+        for span in rich_text.spans:
+            span_start = span.start
+            span_end = span.end
+            span_text = plain[span_start:span_end]
+
+            if span_end <= target_len:
+                # Entire span is before the cutoff
+                new_text.append(span_text, style=span.style)
+                current_pos = span_end
+            elif span_start < target_len:
+                # Span crosses the cutoff - truncate
+                chars_to_keep = target_len - span_start
+                new_text.append(span_text[:chars_to_keep], style=span.style)
+                current_pos = target_len
+                break
+            else:
+                # Span is after cutoff - skip
+                break
+
+        return new_text
 
     def _colorize_line_with_tree_sitter(
         self,
