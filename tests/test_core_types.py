@@ -59,18 +59,26 @@ class TestSignatureInfo(TestCase):
         self.assertEqual(result, "(self, x: int, y: str) -> bool")
 
     def test_render_with_deduplication(self):
-        """HIGH detail should deduplicate repeated param:type patterns."""
-        sig = SignatureInfo(
-            parameters=(("x", "int"), ("y", "int")),
+        """HIGH detail should deduplicate repeated param:type patterns across signatures."""
+        # First signature with 'x: int'
+        sig1 = SignatureInfo(
+            parameters=(("x", "int"),),
             return_type=None,
             decorators=()
         )
         seen = set()
-        result = sig.render(DetailLevel.HIGH, seen)
-
-        # First occurrence shows type, second doesn't
-        self.assertEqual(result, "(x: int, y)")
+        result1 = sig1.render(DetailLevel.HIGH, seen)
+        self.assertEqual(result1, "(x: int)")
         self.assertIn("x:int", seen)
+
+        # Second signature with same 'x: int' - should be deduplicated
+        sig2 = SignatureInfo(
+            parameters=(("x", "int"),),
+            return_type=None,
+            decorators=()
+        )
+        result2 = sig2.render(DetailLevel.HIGH, seen)
+        self.assertEqual(result2, "(x)")  # Type elided since x:int already seen
 
 
 class TestFieldInfo(TestCase):
