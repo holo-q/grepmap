@@ -46,5 +46,10 @@ Issues = "https://github.com/holo-q/grepmap/issues"
 grepmap = "grepmap:main"
 grepmap-mcp = "grepmap_server:main"
 
+[project.optional-dependencies]
+dev = [
+    "testslide>=2.7.0",
+]
+
 [tool.setuptools]
 py-modules = ["grepmap_server", "grepmap", "grepmap_class", "utils", "importance", "scm"]

@@ -285,7 +285,7 @@ class GrepMap:
             if self.directory_mode:
                 return self.directory_renderer.render(tags, chat_rel_fnames, detail)
             else:
-                return self.tree_renderer.render(tags, chat_rel_fnames)
+                return self.tree_renderer.render(tags, chat_rel_fnames, detail)
         
         # Step 3: Optimize to find best configuration
         try:
@@ -305,7 +305,7 @@ class GrepMap:
                     minimal_tags, chat_rel_fnames, DetailLevel.LOW
                 ), file_report
             else:
-                return self.tree_renderer.render(minimal_tags, chat_rel_fnames), file_report
+                return self.tree_renderer.render(minimal_tags, chat_rel_fnames, DetailLevel.LOW), file_report
         
         if self.verbose:
             self.output_handlers['info'](

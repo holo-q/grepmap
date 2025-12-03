@@ -366,7 +366,8 @@ Examples:
 
     if args.verbose:
         print(f"Root path: {root_path}")
-    print(f"Chat files: {chat_files}")
+        if chat_files:
+            print(f"Chat files: {chat_files}")
 
     # Clear cache if requested
     if args.clear_cache:
@@ -423,7 +424,19 @@ Examples:
             
             print(map_content)
         else:
-            tool_output("No grep map generated.")
+            # Provide helpful context about why no map was generated
+            if file_report.excluded:
+                tool_error("No grep map generated. Files were excluded:")
+                for fname, reason in list(file_report.excluded.items())[:5]:
+                    tool_error(f"  {fname}: {reason}")
+                if len(file_report.excluded) > 5:
+                    tool_error(f"  ... and {len(file_report.excluded) - 5} more")
+            elif file_report.total_files_considered == 0:
+                tool_error("No grep map generated: No files provided to analyze")
+            elif file_report.definition_matches == 0:
+                tool_error("No grep map generated: No code definitions found in files")
+            else:
+                tool_error("No grep map generated (check verbose output for details)")
             
     except KeyboardInterrupt:
         tool_error("Interrupted by user")
