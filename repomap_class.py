@@ -1106,10 +1106,7 @@ class RepoMap:
         name = tag.name
 
         if detail_level == DetailLevel.LOW:
-            # Just the name for functions, add fields preview for classes
-            if tag.node_type == "class" and tag.fields:
-                # Show class with field count preview
-                return f"{name}({len(tag.fields)} fields)"
+            # Just the name - fields are shown separately in hierarchy
             return name
 
         # MEDIUM or HIGH: include signature for functions
@@ -1168,6 +1165,42 @@ class RepoMap:
             if sep:
                 line.append(sep, style="dim white")
             line.append(display, style=color)
+            current_length += item_len
+
+        if line:
+            console.print(line, no_wrap=True)
+
+    def _render_field_list(
+        self,
+        console: Console,
+        field_names: List[str],
+        prefix: str,
+        term_width: int,
+        color: str
+    ) -> None:
+        """Render a list of pre-rendered field names with wrapping."""
+        if not field_names:
+            return
+
+        line = Text()
+        line.append(prefix, style="dim white")
+        current_length = len(prefix)
+
+        for i, name in enumerate(field_names):
+            sep = ", " if i > 0 else ""
+            item_len = len(sep) + len(name)
+
+            # Wrap if needed
+            if i > 0 and current_length + item_len > term_width - 5:
+                console.print(line, no_wrap=True)
+                line = Text()
+                line.append(prefix, style="dim white")
+                current_length = len(prefix)
+                sep = ""
+
+            if sep:
+                line.append(sep, style="dim white")
+            line.append(name, style=color)
             current_length += item_len
 
         if line:
@@ -1249,24 +1282,36 @@ class RepoMap:
             text.append(f"{rel_fname}:", style="bold blue")
             console.print(text, no_wrap=True)
 
-            # Render classes with their methods
+            # Render classes with their fields and methods
             for class_tag in classes:
                 class_display = self.render_symbol(class_tag, detail_level, file_seen)
                 line = Text()
                 line.append("  class ", style="magenta")
                 line.append(class_display, style="bold cyan")
 
-                # Get methods for this class
+                # Get fields and methods for this class
+                class_fields = class_tag.fields or ()
                 class_methods = methods_by_class.get(class_tag.name, [])
-                if class_methods:
+
+                if class_fields or class_methods:
                     line.append(":", style="dim white")
                 console.print(line, no_wrap=True)
 
+                # Render fields indented under the class
+                if class_fields:
+                    console.print(Text("    fields:", style="dim magenta"), no_wrap=True)
+                    field_names = [f.render(detail_level) for f in class_fields]
+                    self._render_field_list(
+                        console, field_names,
+                        prefix="      ", term_width=term_width, color="bright_cyan"
+                    )
+
                 # Render methods indented under the class
                 if class_methods:
+                    console.print(Text("    def:", style="dim magenta"), no_wrap=True)
                     self._render_symbol_list(
                         console, class_methods, detail_level, file_seen,
-                        prefix="    ", term_width=term_width, color="yellow"
+                        prefix="      ", term_width=term_width, color="yellow"
                     )
 
             # Render top-level functions
