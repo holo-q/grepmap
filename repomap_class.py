@@ -1140,80 +1140,70 @@ class RepoMap:
 
         return name
 
+    def _render_labeled_list(
+        self,
+        console: Console,
+        items: List[str],
+        indent: str,
+        label: str,
+        term_width: int,
+        label_color: str,
+        item_color: str
+    ) -> None:
+        """Render a labeled list with inline label and aligned continuations.
+
+        Output format:
+            {indent}{label}: item1, item2, item3, ...
+            {indent}        continuation aligned here
+        """
+        if not items:
+            return
+
+        # First line starts with label
+        line = Text()
+        line.append(indent, style="dim white")
+        line.append(f"{label}: ", style=label_color)
+        label_width = len(indent) + len(label) + 2  # +2 for ": "
+        continuation_prefix = " " * label_width
+        current_length = label_width
+
+        for i, item in enumerate(items):
+            sep = ", " if i > 0 else ""
+            item_len = len(sep) + len(item)
+
+            # Wrap if needed
+            if i > 0 and current_length + item_len > term_width - 5:
+                console.print(line, no_wrap=True)
+                line = Text()
+                line.append(continuation_prefix, style="dim white")
+                current_length = label_width
+                sep = ""
+
+            if sep:
+                line.append(sep, style="dim white")
+            line.append(item, style=item_color)
+            current_length += item_len
+
+        if line:
+            console.print(line, no_wrap=True)
+
     def _render_symbol_list(
         self,
         console: Console,
         tags_list: List[Tag],
         detail_level: DetailLevel,
         seen_patterns: set,
-        prefix: str,
+        indent: str,
+        label: str,
         term_width: int,
-        color: str
+        label_color: str,
+        item_color: str
     ) -> None:
-        """Render a list of symbols with wrapping, used for methods/functions/constants."""
+        """Render a labeled list of symbols with wrapping."""
         if not tags_list:
             return
-
-        line = Text()
-        line.append(prefix, style="dim white")
-        current_length = len(prefix)
-
-        for i, tag in enumerate(tags_list):
-            display = self.render_symbol(tag, detail_level, seen_patterns)
-            sep = ", " if i > 0 else ""
-            item_len = len(sep) + len(display)
-
-            # Wrap if needed
-            if i > 0 and current_length + item_len > term_width - 5:
-                console.print(line, no_wrap=True)
-                line = Text()
-                line.append(prefix, style="dim white")
-                current_length = len(prefix)
-                sep = ""
-
-            if sep:
-                line.append(sep, style="dim white")
-            line.append(display, style=color)
-            current_length += item_len
-
-        if line:
-            console.print(line, no_wrap=True)
-
-    def _render_field_list(
-        self,
-        console: Console,
-        field_names: List[str],
-        prefix: str,
-        term_width: int,
-        color: str
-    ) -> None:
-        """Render a list of pre-rendered field names with wrapping."""
-        if not field_names:
-            return
-
-        line = Text()
-        line.append(prefix, style="dim white")
-        current_length = len(prefix)
-
-        for i, name in enumerate(field_names):
-            sep = ", " if i > 0 else ""
-            item_len = len(sep) + len(name)
-
-            # Wrap if needed
-            if i > 0 and current_length + item_len > term_width - 5:
-                console.print(line, no_wrap=True)
-                line = Text()
-                line.append(prefix, style="dim white")
-                current_length = len(prefix)
-                sep = ""
-
-            if sep:
-                line.append(sep, style="dim white")
-            line.append(name, style=color)
-            current_length += item_len
-
-        if line:
-            console.print(line, no_wrap=True)
+        items = [self.render_symbol(tag, detail_level, seen_patterns) for tag in tags_list]
+        self._render_labeled_list(console, items, indent, label, term_width, label_color, item_color)
 
     def to_directory_overview(
         self,
@@ -1326,43 +1316,42 @@ class RepoMap:
 
                 # Render fields indented under the class
                 if class_fields:
-                    console.print(Text("    fields:", style="dim magenta"), no_wrap=True)
                     field_names = [f.render(detail_level) for f in class_fields]
-                    self._render_field_list(
-                        console, field_names,
-                        prefix="      ", term_width=term_width, color="bright_cyan"
+                    self._render_labeled_list(
+                        console, field_names, indent="    ", label="fields",
+                        term_width=term_width, label_color="dim magenta", item_color="bright_cyan"
                     )
 
                 # Render properties indented under the class
                 if class_properties:
-                    console.print(Text("    props:", style="dim magenta"), no_wrap=True)
                     self._render_symbol_list(
                         console, class_properties, detail_level, file_seen,
-                        prefix="      ", term_width=term_width, color="bright_cyan"
+                        indent="    ", label="props", term_width=term_width,
+                        label_color="dim magenta", item_color="bright_cyan"
                     )
 
                 # Render methods indented under the class
                 if class_methods:
-                    console.print(Text("    def:", style="dim magenta"), no_wrap=True)
                     self._render_symbol_list(
                         console, class_methods, detail_level, file_seen,
-                        prefix="      ", term_width=term_width, color="yellow"
+                        indent="    ", label="def", term_width=term_width,
+                        label_color="dim magenta", item_color="yellow"
                     )
 
             # Render top-level functions
             if top_level_funcs:
-                console.print(Text("  def:", style="magenta"), no_wrap=True)
                 self._render_symbol_list(
                     console, top_level_funcs, detail_level, file_seen,
-                    prefix="    ", term_width=term_width, color="green"
+                    indent="  ", label="def", term_width=term_width,
+                    label_color="magenta", item_color="green"
                 )
 
             # Render constants
             if constants:
-                console.print(Text("  const:", style="magenta"), no_wrap=True)
                 self._render_symbol_list(
                     console, constants, detail_level, file_seen,
-                    prefix="    ", term_width=term_width, color="bright_green"
+                    indent="  ", label="const", term_width=term_width,
+                    label_color="magenta", item_color="bright_green"
                 )
 
         # Low-resolution summary: show overflow tags (files beyond the detailed view)
