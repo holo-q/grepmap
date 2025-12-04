@@ -153,6 +153,24 @@ Add to your MCP config (e.g., `~/.config/claude/claude_desktop_config.json`):
 }
 ```
 
+### CLI via CLAUDE.md (Alternative to MCP)
+
+If you prefer CLI invocation over MCP, add this to your project's `CLAUDE.md`:
+
+```markdown
+## Codebase Navigation
+
+Use `uvx grepmap` to orient yourself in the codebase before searching:
+
+- `uvx grepmap .` — ranked overview of important files and symbols
+- `uvx grepmap . --map-tokens 4096` — more detail
+- `uvx grepmap . --chat-files src/main.py` — focus on specific files
+- `uvx grepmap src/file.py --tree` — deep dive into one file
+
+grepmap shows WHAT and WHERE (ranked by importance). Use grep/rg for HOW (exact content).
+Workflow: orient with grepmap → hypothesize → verify with grep → deep dive with --tree
+```
+
 ### MCP Tools
 
 #### `grep_map`
