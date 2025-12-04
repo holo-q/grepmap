@@ -8,15 +8,25 @@ from fastmcp import FastMCP, settings
 from grepmap_class import GrepMap
 from utils import count_tokens, read_text
 
-# Helper function from your CLI, useful to have here
+# File extensions excluded from directory scans by default.
+# Markdown files can still be processed when explicitly specified via chat_files or other_files.
+EXCLUDED_EXTENSIONS = {'.md', '.markdown', '.mdown', '.mkd'}
+
+
+def _is_excluded_by_default(filename: str) -> bool:
+    """Check if a file should be excluded from directory scans by default."""
+    return any(filename.lower().endswith(ext) for ext in EXCLUDED_EXTENSIONS)
+
+
 def find_src_files(directory: str) -> List[str]:
+    """Find source files in a directory, excluding markdown by default."""
     if not os.path.isdir(directory):
         return [directory] if os.path.isfile(directory) else []
     src_files = []
     for r, d, f_list in os.walk(directory):
         d[:] = [d_name for d_name in d if not d_name.startswith('.') and d_name not in {'node_modules', '__pycache__', 'venv', 'env'}]
         for f in f_list:
-            if not f.startswith('.'):
+            if not f.startswith('.') and not _is_excluded_by_default(f):
                 src_files.append(os.path.join(r, f))
     return src_files
 
@@ -59,25 +69,39 @@ async def grep_map(
     verbose: bool = False,
     max_context_window: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Generate a ranked map of a codebase showing important files and symbols.
+    """Generate a topology-aware structural map using PageRank over the dependency graph.
 
-    This is your GPS for navigating code. It uses PageRank to identify the "main characters" -
-    files that other code depends on most. Use this BEFORE diving into grep searches to orient
-    yourself and understand where the action is.
+    **What this provides:**
+    NOT alphabetical file lists. YES graph-theoretic importance analysis.
+    - Parses all code with tree-sitter (functions, classes, imports, references)
+    - Builds dependency graph: files as nodes, symbol references as edges
+    - Runs PageRank with depth-aware personalization (root=1.0x, vendor=0.01x)
+    - Binary-searches token budget to maximize information density
+
+    **Topology preservation:**
+    Output maintains directory hierarchy and class structure:
+    - Directory nesting shows architectural layers
+    - Classes display fields/properties/methods grouped hierarchically
+    - Multi-line signatures collapsed to one line with full type info
+    - Colon stripping and type deduplication for token efficiency
+
+    **Causality model:**
+    High-ranked files are *dependencies* of many others (causal anchors).
+    If session.py has high PageRank, it's because many files import from it.
+    This is transitive importance, not file size or alphabetical proximity.
 
     **Workflow pattern:**
-    1. Call grep_map first to see the landscape (which files matter)
-    2. Identify relevant files from the rankings
-    3. Call again with those files in chat_files for more detail
-    4. Use search_identifiers or grep for specific symbols
-    5. Read files directly for final verification
+    1. Call grep_map FIRST to learn graph topology (which files are central)
+    2. Hypothesize: "session management probably in high-ranked session.py"
+    3. Call again with chat_files to boost specific files for deeper detail
+    4. Verify with search_identifiers or grep for exact content
+    5. Read files directly for final confirmation
 
     **When to use this vs grep:**
-    - grep_map: "Where does session management happen?" → shows you session.py is a VIP
-    - grep: "What's on line 42 of session.py?" → exact content lookup
+    - grep_map: "WHERE does session management happen?" → surfaces session.py as VIP
+    - grep: "HOW is session.start() implemented?" → exact line-by-line content
 
-    The map shows classes, functions, and methods organized by directory topology,
-    with high-PageRank files promoted and vendor/deep-nested files demoted.
+    The map shows WHAT exists and WHERE it matters (ranked). Grep shows HOW it works.
 
     :param project_root: Absolute path to the project root directory.
     :param chat_files: Files you're actively working on (relative paths). Get highest ranking boost.
@@ -187,23 +211,36 @@ async def search_identifiers(
     include_definitions: bool = True,
     include_references: bool = True
 ) -> Dict[str, Any]:
-    """Search for symbols (functions, classes, variables) across the codebase.
+    """AST-aware symbol search across the dependency graph (microscope after GPS).
 
-    This is your microscope for finding specific symbols. Use it AFTER grep_map has oriented you,
-    or when you know exactly what identifier you're looking for.
+    **What this provides:**
+    NOT text search. YES tree-sitter structural analysis.
+    - Extracts ALL symbols from parsed ASTs (functions, classes, variables, methods)
+    - Distinguishes definitions (where declared) from references (where used)
+    - Returns code context with syntax highlighting for each match
+    - Case-insensitive partial matching with relevance sorting
+
+    **Structural awareness:**
+    Unlike grep, this understands code semantics:
+    - Finds symbol definitions (def MyClass:, def my_function():)
+    - Finds symbol references (calls, imports, attribute access)
+    - Knows the difference between "Session" the class vs "session" the variable
+    - Provides context lines showing actual usage in situ
 
     **When to use this:**
-    - You know the function/class name but not which file it's in
-    - You want to find all definitions AND usages of a symbol
-    - You need AST-aware search (understands code structure, not just text)
+    - After grep_map identifies important files, drill down to specific symbols
+    - "Find all definitions and usages of 'Session'"
+    - "Where is get_frame() defined and called?"
+    - AST-level accuracy (not fooled by comments or strings)
 
     **When to use grep instead:**
-    - Searching for arbitrary strings or patterns
-    - Looking for comments, strings, or non-identifier text
-    - Need regex matching
+    - Arbitrary string/regex patterns ("TODO|FIXME")
+    - Text in comments, docstrings, or string literals
+    - Non-identifier searches (URLs, config values, etc.)
 
-    The search is case-insensitive and matches partial names. Results are sorted with
-    definitions first, then references.
+    **Result ordering:**
+    Definitions first (most relevant), then references, sorted by match quality.
+    Each result includes file path, line number, symbol kind, and surrounding context.
 
     :param project_root: Absolute path to the project root directory.
     :param query: Identifier name to search for (e.g., "Session", "get_frame", "fps").
