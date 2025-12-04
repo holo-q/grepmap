@@ -158,17 +158,75 @@ Add to your MCP config (e.g., `~/.config/claude/claude_desktop_config.json`):
 If you prefer CLI invocation over MCP, add this to your project's `CLAUDE.md`:
 
 ```markdown
-## Codebase Navigation
+## Codebase Navigation: Topology-Aware Sampling
 
-Use `uvx grepmap` to orient yourself in the codebase before searching:
+`grepmap` provides density-optimized structural maps of codebases using PageRank over dependency graphs.
 
-- `uvx grepmap .` — ranked overview of important files and symbols
-- `uvx grepmap . --map-tokens 4096` — more detail
-- `uvx grepmap . --chat-files src/main.py` — focus on specific files
-- `uvx grepmap src/file.py --tree` — deep dive into one file
+### What It Samples
 
-grepmap shows WHAT and WHERE (ranked by importance). Use grep/rg for HOW (exact content).
-Workflow: orient with grepmap → hypothesize → verify with grep → deep dive with --tree
+**Not** alphabetical listings or random file walks. **Yes** graph-theoretic importance:
+- Parses all code with tree-sitter (functions, classes, imports, references)
+- Builds dependency graph: files as nodes, symbol references as edges
+- Runs PageRank with depth-aware personalization (root files = 1.0x, deep vendor code = 0.01x)
+- Binary-searches token budget to maximize information density
+
+**Result**: You see files ranked by *transitive importance* (what depends on what), not file size or proximity.
+
+### Topology Preservation
+
+The output maintains **directory hierarchy** and **class structure**:
+- Directory nesting shows architectural layers
+- Classes display fields and methods grouped by visibility (properties, methods)
+- Signatures normalized to one line (multi-line defs collapsed with full type info)
+- Trailing colons stripped (saves 1 token/symbol)
+
+**Scale handling**:
+- Adjusts detail level (LOW/MEDIUM/HIGH) based on token budget
+- Shows "main characters" first, demotes vendor/generated code
+- Overflow section lists additional files at low resolution for extended orientation
+
+### Usage Patterns
+
+**Orient first** (prevent random file diving):
+```bash
+uvx grepmap .  # Ranked overview, ~8k tokens
+uvx grepmap . --map-tokens 4096  # Denser for smaller budgets
+```
+
+**Focus on active work** (boost specific files in ranking):
+```bash
+uvx grepmap . --chat-files src/session.py src/renderer.py
+```
+
+**Deep dive one file** (complete symbol listing with signatures):
+```bash
+uvx grepmap src/gui/component.py --tree
+```
+
+**After modifying graph** (cache invalidation):
+```bash
+uvx grepmap . --force-refresh
+```
+
+### Information Density Characteristics
+
+- **Breadth**: Covers entire dependency graph, not just git root files
+- **Sampling**: PageRank surfaces central nodes; depth penalty demotes leaf files
+- **Compression**: Multi-line signatures → one line, type deduplication, colon stripping
+- **Topology**: Hierarchical (directories → files → classes → methods), not flat
+- **Scale**: Binary search finds maximum coverage within token budget
+- **Causality**: High-ranked files are *dependencies* of many others (causal anchors)
+
+### Workflow: GPS → Microscope
+
+1. **Orient** (`grepmap .`) — learn graph topology, identify VIP files
+2. **Hypothesize** — "session management probably in high-ranked session.py"
+3. **Verify** (`rg "keyword" file.py`) — grep exact content in discovered files
+4. **Deep dive** (`grepmap file.py --tree`) — see complete symbol listing
+
+grepmap shows **WHAT exists** and **WHERE it matters** (ranked). grep shows **HOW it works** (content).
+
+Don't search blindly. Let PageRank guide you to causal anchors first.
 ```
 
 ### MCP Tools
