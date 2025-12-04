@@ -37,8 +37,23 @@ __all__ = [
     'GrepMap',
     'Tag',
     'RankedTag',
-    'DetailLevel', 
+    'DetailLevel',
     'SignatureInfo',
     'FieldInfo',
     'FileReport',
+    'main',
 ]
+
+
+def main():
+    """CLI entry point - delegates to standalone grepmap.py module."""
+    import sys
+    import os
+    # Import from the parent directory's grepmap.py (not this package)
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, parent_dir)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("grepmap_cli", os.path.join(parent_dir, "grepmap.py"))
+    grepmap_cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(grepmap_cli)
+    grepmap_cli.main()

@@ -59,29 +59,37 @@ async def grep_map(
     verbose: bool = False,
     max_context_window: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Generate a grep map for the specified files, providing a list of function prototypes and variables for files as well as relevant related
-    files. Provide filenames relative to the project_root. In addition to the files provided, relevant related files will also be included with a
-    very small ranking boost.
+    """Generate a ranked map of a codebase showing important files and symbols.
 
-    :param project_root: Root directory of the project to search.  (must be an absolute path!)
-    :param chat_files: A list of file paths that are currently in the chat context. These files will receive the highest ranking.
-    :param other_files: A list of other relevant file paths in the repository to consider for the map. They receive a lower ranking boost than mentioned_files and chat_files.
-    :param token_limit: The maximum number of tokens the generated grep map should occupy. Defaults to 8192.
-    :param exclude_unranked: If True, files with a PageRank of 0.0 will be excluded from the map. Defaults to False.
-    :param force_refresh: If True, forces a refresh of the grep map cache. Defaults to False.
-    :param mentioned_files: Optional list of file paths explicitly mentioned in the conversation and receive a mid-level ranking boost.
-    :param mentioned_idents: Optional list of identifiers explicitly mentioned in the conversation, to boost their ranking.
-    :param verbose: If True, enables verbose logging for the RepoMap generation process. Defaults to False.
-    :param max_context_window: Optional maximum context window size for token calculation, used to adjust map token limit when no chat files are provided.
-    :returns: A dictionary containing:
-        - 'map': the generated grep map string
-        - 'report': a dictionary with file processing details including:
-            - 'included': list of processed files
-            - 'excluded': dictionary of excluded files with reasons
-            - 'definition_matches': count of matched definitions
-            - 'reference_matches': count of matched references
-            - 'total_files_considered': total files processed
-        Or an 'error' key if an error occurred.
+    This is your GPS for navigating code. It uses PageRank to identify the "main characters" -
+    files that other code depends on most. Use this BEFORE diving into grep searches to orient
+    yourself and understand where the action is.
+
+    **Workflow pattern:**
+    1. Call grep_map first to see the landscape (which files matter)
+    2. Identify relevant files from the rankings
+    3. Call again with those files in chat_files for more detail
+    4. Use search_identifiers or grep for specific symbols
+    5. Read files directly for final verification
+
+    **When to use this vs grep:**
+    - grep_map: "Where does session management happen?" → shows you session.py is a VIP
+    - grep: "What's on line 42 of session.py?" → exact content lookup
+
+    The map shows classes, functions, and methods organized by directory topology,
+    with high-PageRank files promoted and vendor/deep-nested files demoted.
+
+    :param project_root: Absolute path to the project root directory.
+    :param chat_files: Files you're actively working on (relative paths). Get highest ranking boost.
+    :param other_files: Additional files to consider. If omitted, scans entire project.
+    :param token_limit: Token budget for the map output (default: 8192). Increase for more detail.
+    :param exclude_unranked: Hide files with PageRank of 0 (peripheral files).
+    :param force_refresh: Bypass cache and reparse everything.
+    :param mentioned_files: Files mentioned in conversation (mid-level ranking boost).
+    :param mentioned_idents: Identifiers to boost (function/class names you're looking for).
+    :param verbose: Show ranking details and debug info.
+    :param max_context_window: Max context window for token calculation.
+    :returns: {map: string, report: {excluded, definition_matches, reference_matches, total_files_considered}}
     """
     if not os.path.isdir(project_root):
         return {"error": f"Project root directory not found: {project_root}"}
@@ -179,20 +187,31 @@ async def search_identifiers(
     include_definitions: bool = True,
     include_references: bool = True
 ) -> Dict[str, Any]:
-    """Search for identifiers in code files. Get back a list of matching identifiers with their file, line number, and context.
-       When searching, just use the identifier name without any special characters, prefixes or suffixes. The search is 
-       case-insensitive.
+    """Search for symbols (functions, classes, variables) across the codebase.
 
-    Args:
-        project_root: Root directory of the project to search.  (must be an absolute path!)
-        query: Search query (identifier name)
-        max_results: Maximum number of results to return
-        context_lines: Number of lines of context to show
-        include_definitions: Whether to include definition occurrences
-        include_references: Whether to include reference occurrences
-    
-    Returns:
-        Dictionary containing search results or error message
+    This is your microscope for finding specific symbols. Use it AFTER grep_map has oriented you,
+    or when you know exactly what identifier you're looking for.
+
+    **When to use this:**
+    - You know the function/class name but not which file it's in
+    - You want to find all definitions AND usages of a symbol
+    - You need AST-aware search (understands code structure, not just text)
+
+    **When to use grep instead:**
+    - Searching for arbitrary strings or patterns
+    - Looking for comments, strings, or non-identifier text
+    - Need regex matching
+
+    The search is case-insensitive and matches partial names. Results are sorted with
+    definitions first, then references.
+
+    :param project_root: Absolute path to the project root directory.
+    :param query: Identifier name to search for (e.g., "Session", "get_frame", "fps").
+    :param max_results: Maximum results to return (default: 50).
+    :param context_lines: Lines of context around each match (default: 2).
+    :param include_definitions: Include where symbols are defined (default: true).
+    :param include_references: Include where symbols are used (default: true).
+    :returns: {results: [{file, line, name, kind (def/ref), context}]}
     """
     if not os.path.isdir(project_root):
         return {"error": f"Project root directory not found: {project_root}"}

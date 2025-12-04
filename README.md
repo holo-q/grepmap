@@ -74,25 +74,69 @@ grepmap . --clear-cache
 | `--force-refresh` | Ignore cache, reparse everything |
 | `--clear-cache` | Nuke the cache directory |
 
-## How It Actually Works
+## Workflow: GPS + Microscope
 
-1. **Parse everything** — tree-sitter extracts definitions and references from your code
-2. **Build the graph** — files become nodes, symbol references become edges
-3. **Run PageRank** — with depth-aware personalization that penalizes `node_modules` and `vendor/` while letting truly interconnected deep files rise
-4. **Binary search for fit** — finds the maximum content that fits your token budget
-5. **Render prettily** — syntax highlighting, directory trees, class summaries
+grepmap is your codebase GPS. grep/rg is your microscope. Use them together.
 
-The depth penalty is applied *in graph space*, not as post-processing. This means if some deeply nested file is genuinely crucial (referenced by 166 files with 313 edges), PageRank will surface it anyway. The algorithm respects reality over appearances.
+**The pattern that works:**
+
+```
+Orient (grepmap) → Hypothesize → Verify (rg) → Deep dive (--tree)
+```
+
+### 1. Start with the map
+
+```bash
+grepmap ~/myproject --map-tokens 2048
+```
+
+This shows you the "main characters"—files ranked by actual importance. Don't dive into random files; let PageRank tell you where the action is.
+
+### 2. Follow the rankings
+
+High-ranked files are the ones everything depends on. If you're looking for "where sessions are managed," the map already told you `session.py` is a VIP. Start there.
+
+### 3. Zoom in with --chat-files
+
+Found the neighborhood? Focus on it:
+
+```bash
+grepmap ~/myproject --chat-files src/session.py src/renderer.py
+```
+
+This boosts those files and shows you their connections.
+
+### 4. Deep dive with --tree
+
+Need to understand one file completely?
+
+```bash
+grepmap src/gui/dear_discore.py --tree
+```
+
+This shows every class, method, and function in the file with their signatures.
+
+### 5. Verify with grep
+
+Once you know WHERE to look, use rg for the last mile:
+
+```bash
+rg "fps.*=" src/session.py -n
+```
+
+**The insight:** grepmap shows you WHAT and WHERE. grep shows you HOW. Together they're like having a codebase GPS and a microscope.
 
 ## MCP Server
 
-grepmap ships with an MCP server for integration with AI tools:
+grepmap ships with an MCP server for integration with AI tools like Claude Desktop, Cline, or any MCP-compatible client.
+
+### Setup
 
 ```bash
 grepmap-mcp
 ```
 
-Configure in your MCP client (e.g., Claude Desktop, Cline):
+Configure in your MCP client:
 
 ```json
 {
@@ -106,8 +150,50 @@ Configure in your MCP client (e.g., Claude Desktop, Cline):
 
 ### MCP Tools
 
-- **`grep_map`** — Generate a ranked map of a project
-- **`search_identifiers`** — Search for symbols across the codebase
+#### `grep_map`
+
+Generate a ranked map of a project. The main tool.
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `project_root` | string | **Required.** Absolute path to the project root |
+| `chat_files` | string[] | Files currently in focus (highest ranking boost) |
+| `other_files` | string[] | Additional files to consider |
+| `token_limit` | int | Token budget for the map (default: 8192) |
+| `mentioned_files` | string[] | Files mentioned in conversation (mid boost) |
+| `mentioned_idents` | string[] | Identifiers to boost (function names, etc.) |
+| `exclude_unranked` | bool | Hide files with PageRank of 0 |
+| `force_refresh` | bool | Bypass cache |
+| `verbose` | bool | Show ranking details |
+
+**Returns:** `{ map: string, report: { excluded, definition_matches, reference_matches, total_files_considered } }`
+
+#### `search_identifiers`
+
+Search for symbols across the codebase. Useful for finding where things are defined or referenced.
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `project_root` | string | **Required.** Absolute path to the project root |
+| `query` | string | **Required.** Identifier name to search for |
+| `max_results` | int | Maximum results to return (default: 50) |
+| `context_lines` | int | Lines of context around matches (default: 2) |
+| `include_definitions` | bool | Include where symbols are defined (default: true) |
+| `include_references` | bool | Include where symbols are used (default: true) |
+
+**Returns:** `{ results: [{ file, line, name, kind, context }] }`
+
+## How It Actually Works
+
+1. **Parse everything** — tree-sitter extracts definitions and references from your code
+2. **Build the graph** — files become nodes, symbol references become edges
+3. **Run PageRank** — with depth-aware personalization that penalizes `node_modules` and `vendor/` while letting truly interconnected deep files rise
+4. **Binary search for fit** — finds the maximum content that fits your token budget
+5. **Render prettily** — syntax highlighting, directory trees, class summaries
+
+The depth penalty is applied *in graph space*, not as post-processing. This means if some deeply nested file is genuinely crucial (referenced by 166 files with 313 edges), PageRank will surface it anyway. The algorithm respects reality over appearances.
 
 ## Why PageRank?
 
