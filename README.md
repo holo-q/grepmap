@@ -31,12 +31,14 @@ The deeply nested vendor code that nobody actually uses? Demoted. Your core `ses
 ## Installation
 
 ```bash
-pip install grepmap
-```
+# Run directly without installing
+uvx grepmap .
 
-Or with uv:
-```bash
+# Or install globally
 uv tool install grepmap
+
+# Or with pip
+pip install grepmap
 ```
 
 ## Usage
@@ -128,21 +130,24 @@ rg "fps.*=" src/session.py -n
 
 ## MCP Server
 
-grepmap ships with an MCP server for integration with AI tools like Claude Desktop, Cline, or any MCP-compatible client.
+grepmap ships with an MCP server for integration with AI tools.
 
-### Setup
+### Claude Code
 
 ```bash
-grepmap-mcp
+claude mcp add grepmap -- uvx grepmap-mcp
 ```
 
-Configure in your MCP client:
+### Claude Desktop / Cline / Other MCP Clients
+
+Add to your MCP config (e.g., `~/.config/claude/claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "grepmap": {
-      "command": "grepmap-mcp"
+      "command": "uvx",
+      "args": ["grepmap-mcp"]
     }
   }
 }
