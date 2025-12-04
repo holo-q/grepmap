@@ -1,8 +1,11 @@
 .aider*
 .repomap*
 .grepmap*
-.venv
+.venv/
+.ruff_cache/
+.claude/
 __pycache__/
 *.egg-info/
 build/
 dist/
+tmp/
