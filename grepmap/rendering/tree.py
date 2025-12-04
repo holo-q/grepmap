@@ -259,17 +259,17 @@ class TreeRenderer:
             # Get the rendered output
             return string_io.getvalue().rstrip()
 
-        # Use TreeContext for non-colored rendering
+        # Use TreeContext for non-colored rendering (fallback)
         try:
-            if rel_fname not in self.tree_context_cache:
-                self.tree_context_cache[rel_fname] = TreeContext(
-                    rel_fname,
-                    code,
-                    color=False
-                )
+            # TreeContext API changed - use simple fallback instead
+            lines = code.splitlines()
+            result_lines = [f"{rel_fname}:"]
 
-            tree_context = self.tree_context_cache[rel_fname]
-            return tree_context.format(lois)
+            for loi in sorted(set(lois)):
+                if 1 <= loi <= len(lines):
+                    result_lines.append(f"{loi:4d}: {lines[loi-1]}")
+
+            return "\n".join(result_lines)
 
         except Exception:
             # Fallback to simple line extraction
@@ -306,7 +306,6 @@ class TreeRenderer:
         target_len = len(stripped_plain) - 1  # Remove the colon
 
         # Walk through spans and copy up to target length
-        current_pos = 0
         for span in rich_text.spans:
             span_start = span.start
             span_end = span.end
@@ -315,12 +314,10 @@ class TreeRenderer:
             if span_end <= target_len:
                 # Entire span is before the cutoff
                 new_text.append(span_text, style=span.style)
-                current_pos = span_end
             elif span_start < target_len:
                 # Span crosses the cutoff - truncate
                 chars_to_keep = target_len - span_start
                 new_text.append(span_text[:chars_to_keep], style=span.style)
-                current_pos = target_len
                 break
             else:
                 # Span is after cutoff - skip

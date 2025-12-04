@@ -1,7 +1,6 @@
 """Debug why no map is generated for specific file."""
 
 import sys
-import os
 sys.path.insert(0, '/home/nuck/Repositories/RepoMapper')
 
 from pathlib import Path
@@ -36,20 +35,20 @@ if abs_path.exists():
     )
 
     print(f"\nResult is None: {result is None}")
-    print(f"\nFile Report:")
+    print("\nFile Report:")
     print(f"  - Total files: {report.total_files_considered}")
     print(f"  - Definitions: {report.definition_matches}")
     print(f"  - References: {report.reference_matches}")
     print(f"  - Excluded: {len(report.excluded)}")
 
     if report.excluded:
-        print(f"\nExcluded files:")
+        print("\nExcluded files:")
         for fname, reason in report.excluded.items():
             print(f"  - {fname}: {reason}")
 
     if result:
         print(f"\nMap length: {len(result)} chars")
-        print(f"\nFirst 500 chars of map:")
+        print("\nFirst 500 chars of map:")
         print(result[:500])
 else:
     print("\n❌ File does not exist!")

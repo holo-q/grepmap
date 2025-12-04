@@ -7,7 +7,7 @@ These tests validate end-to-end behavior to catch regressions like:
 - Cache corruption
 """
 
-from testslide import TestCase
+from testslide import TestCase  # type: ignore[import-untyped]
 from pathlib import Path
 import tempfile
 import os
@@ -62,6 +62,7 @@ class Greeter:
 
         # Validate we got output
         self.assertIsNotNone(result, "Map should not be None")
+        assert result is not None  # Type narrowing for type checker
         self.assertGreater(len(result), 0, "Map should not be empty")
 
         # Validate we extracted definitions
@@ -157,6 +158,7 @@ class Class2:
         # More files should produce more content
         self.assertIsNotNone(result1)
         self.assertIsNotNone(result2)
+        assert result1 is not None and result2 is not None  # Type narrowing
         self.assertGreater(len(result2), len(result1),
                           "Map with 2 files should be larger than map with 1 file")
         self.assertGreater(report2.definition_matches, report1.definition_matches,
@@ -235,6 +237,7 @@ def function():
         # Both should generate non-empty output with symbols
         self.assertIsNotNone(result_dir, "Directory mode should generate output")
         self.assertIsNotNone(result_tree, "Tree mode should generate output")
+        assert result_dir is not None and result_tree is not None  # Type narrowing
         self.assertGreater(len(result_dir), 0, "Directory mode output should not be empty")
         self.assertGreater(len(result_tree), 0, "Tree mode output should not be empty")
 
@@ -292,6 +295,7 @@ class Class_{i}:
         # Both should generate output
         self.assertIsNotNone(result_small)
         self.assertIsNotNone(result_large)
+        assert result_small is not None and result_large is not None  # Type narrowing
 
         # Larger budget should produce more content
         self.assertGreater(len(result_large), len(result_small),

@@ -1,6 +1,6 @@
 """Tests for core type definitions and their methods."""
 
-from testslide import TestCase
+from testslide import TestCase  # type: ignore[import-untyped]
 from grepmap.core.types import (
     DetailLevel,
     SignatureInfo,
@@ -135,7 +135,7 @@ class TestTag(TestCase):
             parent_line=None
         )
         with self.assertRaises(Exception):  # FrozenInstanceError
-            tag.name = "bar"
+            tag.name = "bar"  # type: ignore[misc]
 
 
 class TestRankedTag(TestCase):

@@ -4,11 +4,10 @@ Handles persistent tag caching using diskcache, with error recovery
 and version management for cache invalidation.
 """
 
-import os
 import shutil
 import sqlite3
 from pathlib import Path
-from typing import Optional, List, Dict, Callable, Any
+from typing import Optional, List, Callable, Any
 from grepmap.core.types import Tag
 
 

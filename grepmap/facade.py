@@ -15,7 +15,6 @@ modules for each concern.
 import os
 from pathlib import Path
 from typing import List, Dict, Set, Optional, Tuple, Callable
-from collections import defaultdict
 
 from grepmap.core.types import Tag, RankedTag, DetailLevel, FileReport
 from grepmap.cache import CacheManager
@@ -475,15 +474,15 @@ class GrepMap:
         """Count tokens in text with sampling optimization for long texts."""
         if not text:
             return 0
-        
+
         len_text = len(text)
         if len_text < 200:
             return self.token_count_func_internal(text)
-        
+
         # Sample for longer texts
         lines = text.splitlines(keepends=True)
         num_lines = len(lines)
-        
+
         step = max(1, num_lines // 100)
         sampled_lines = lines[::step]
         sample_text = "".join(sampled_lines)
@@ -498,6 +497,19 @@ class GrepMap:
         
         est_tokens = (sample_tokens / len(sample_text)) * len_text
         return int(est_tokens)
+
+    def render_tree(self, abs_fname: str, rel_fname: str, lines_of_interest: List[int]) -> str:
+        """Render specific lines from a file with syntax highlighting.
+
+        Args:
+            abs_fname: Absolute file path
+            rel_fname: Relative file path
+            lines_of_interest: List of line numbers to display
+
+        Returns:
+            Formatted code snippet with syntax highlighting
+        """
+        return self.tree_renderer._render_tree(abs_fname, rel_fname, lines_of_interest, None)
     
     # =========================================================================
     # Legacy Compatibility Methods

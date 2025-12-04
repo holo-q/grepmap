@@ -54,6 +54,10 @@ def main():
     sys.path.insert(0, parent_dir)
     import importlib.util
     spec = importlib.util.spec_from_file_location("grepmap_cli", os.path.join(parent_dir, "grepmap.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load grepmap CLI module")
     grepmap_cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(grepmap_cli)
-    grepmap_cli.main()
+    if not hasattr(grepmap_cli, 'main'):
+        raise AttributeError("grepmap CLI module has no main() function")
+    grepmap_cli.main()  # type: ignore[attr-defined]
