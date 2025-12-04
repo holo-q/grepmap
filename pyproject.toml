@@ -52,4 +52,5 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["grepmap_server", "grepmap", "grepmap_class", "utils", "importance", "scm"]
+packages = ["grepmap"]
+py-modules = ["grepmap_server", "grepmap_class", "utils", "importance", "scm"]
