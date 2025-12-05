@@ -121,10 +121,10 @@ def main():
         process.stdin.write(prompt)
         process.stdin.close()
 
-        # Stream output
+        # Stream output in real-time (flush=True ensures immediate visibility)
         output_lines = []
         for line in process.stdout:
-            print(line, end='')
+            print(line, end='', flush=True)
             output_lines.append(line)
 
         process.wait(timeout=args.timeout)
@@ -137,29 +137,36 @@ def main():
         print("\n=== Quick Analysis ===")
         print(f"Output length: {len(output)} chars (~{len(output)//4} tokens)")
 
+        # Count actual tool invocations by looking for shell commands
+        # Pattern: command appears after "exec" or at start of line with typical args
+        import re
+
+        grepmap_invocations = len(re.findall(r"grepmap\s+[\.\/\w]", output))
+        rg_invocations = len(re.findall(r"(?:^|\s)rg\s+-?[nlwi]", output, re.MULTILINE))
+        cat_invocations = len(re.findall(r"(?:^|\s)(?:cat|head|tail)\s+", output, re.MULTILINE))
+        find_invocations = len(re.findall(r"(?:^|\s)find\s+", output, re.MULTILINE))
+
         tools_used = []
-        if 'grepmap' in output.lower():
-            tools_used.append('grepmap')
-        if 'rg ' in output:
-            tools_used.append('ripgrep')
-        if 'cat ' in output:
-            tools_used.append('cat')
-        if 'find ' in output:
-            tools_used.append('find')
+        if grepmap_invocations:
+            tools_used.append(f'grepmap({grepmap_invocations})')
+        if rg_invocations:
+            tools_used.append(f'ripgrep({rg_invocations})')
+        if cat_invocations:
+            tools_used.append(f'cat/head/tail({cat_invocations})')
+        if find_invocations:
+            tools_used.append(f'find({find_invocations})')
 
-        print(f"Tools used: {', '.join(tools_used) if tools_used else 'none detected'}")
+        print(f"Tool invocations: {', '.join(tools_used) if tools_used else 'none detected'}")
 
-        # Count tool invocations
-        grepmap_count = output.lower().count('grepmap')
-        rg_count = output.count('rg ')
-        cat_count = output.count('cat ')
-
-        if grepmap_count > 2:
-            print(f"⚠ Multiple grepmap calls ({grepmap_count}) - might need better single-shot coverage")
-        if rg_count > 5:
-            print(f"⚠ Many grep searches ({rg_count}) - might need structured search affordance")
-        if cat_count > 3:
-            print(f"⚠ Many file reads ({cat_count}) - might need better preview/context")
+        # Analysis hints
+        if grepmap_invocations > 3:
+            print(f"⚠ Many grepmap calls ({grepmap_invocations}) - might need better single-shot coverage")
+        if rg_invocations > 5:
+            print(f"⚠ Many grep searches ({rg_invocations}) - might need structured search affordance")
+        if cat_invocations > 3:
+            print(f"⚠ Many file reads ({cat_invocations}) - might need better preview/context")
+        if grepmap_invocations == 0 and '--tools grepmap' in ' '.join(sys.argv):
+            print(f"⚠ grepmap not used despite being available - check if it's working in target env")
 
     except subprocess.TimeoutExpired:
         print(f"\n\n>>> TIMEOUT after {args.timeout}s")
