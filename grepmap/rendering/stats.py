@@ -307,7 +307,7 @@ class StatsRenderer:
         """Render flat file list sorted by rank.
 
         Simple flat view with relative paths, no tree structure.
-        Files sorted by PageRank importance.
+        Files sorted by PageRank importance. Stats first for easy scanning.
 
         Args:
             console: Rich console for output
@@ -319,10 +319,11 @@ class StatsRenderer:
             loc, defs = file_stats.get(rel_fname, (0, 0))
 
             line = Text()
+            line.append(f"{loc:>5} loc; {defs:>3} def  ", style="dim white")
+
             if rel_fname in chat_files:
                 line.append(rel_fname, style="bold green")
             else:
                 line.append(rel_fname, style="cyan")
 
-            line.append(f" {loc} loc; {defs} def", style="dim white")
             console.print(line, no_wrap=True)
