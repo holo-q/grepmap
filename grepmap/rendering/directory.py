@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.text import Text
 
 from grepmap.core.types import RankedTag, Tag, DetailLevel
+from grepmap.rendering.syntax import get_token_color
 
 
 class DirectoryRenderer:
@@ -135,10 +136,10 @@ class DirectoryRenderer:
 
             # Render classes with their fields and methods
             for class_tag in classes:
-                class_display = self._render_symbol(class_tag, detail, file_seen)
+                class_display = self._render_symbol(class_tag, detail, file_seen, name_color="bold cyan")
                 line = Text()
                 line.append("  class ", style="magenta")
-                line.append(class_display, style="bold cyan")
+                line.append_text(class_display)
 
                 # Get fields and methods for this class
                 class_fields = class_tag.fields or ()
@@ -161,10 +162,12 @@ class DirectoryRenderer:
 
                 # Render fields indented under the class
                 if class_fields:
-                    field_names = [f.render(detail) for f in class_fields]
+                    field_items = [
+                        self._render_field(f, detail) for f in class_fields
+                    ]
                     self._render_labeled_list(
-                        console, field_names, indent="    ", label="fields",
-                        term_width=term_width, label_color="dim magenta", item_color="bright_cyan"
+                        console, field_items, indent="    ", label="fields",
+                        term_width=term_width, label_color="dim magenta"
                     )
 
                 # Render properties indented under the class
@@ -172,7 +175,7 @@ class DirectoryRenderer:
                     self._render_symbol_list(
                         console, class_properties, detail, file_seen,
                         indent="    ", label="props", term_width=term_width,
-                        label_color="dim magenta", item_color="bright_cyan"
+                        label_color="dim magenta", name_color="bright_cyan"
                     )
 
                 # Render methods indented under the class
@@ -180,7 +183,7 @@ class DirectoryRenderer:
                     self._render_symbol_list(
                         console, class_methods, detail, file_seen,
                         indent="    ", label="def", term_width=term_width,
-                        label_color="dim magenta", item_color="yellow"
+                        label_color="dim magenta", name_color="yellow"
                     )
 
             # Render top-level functions
@@ -188,7 +191,7 @@ class DirectoryRenderer:
                 self._render_symbol_list(
                     console, top_level_funcs, detail, file_seen,
                     indent="  ", label="def", term_width=term_width,
-                    label_color="magenta", item_color="green"
+                    label_color="magenta", name_color="green"
                 )
 
             # Render constants
@@ -196,7 +199,7 @@ class DirectoryRenderer:
                 self._render_symbol_list(
                     console, constants, detail, file_seen,
                     indent="  ", label="const", term_width=term_width,
-                    label_color="magenta", item_color="bright_green"
+                    label_color="magenta", name_color="bright_green"
                 )
 
         # Low-resolution summary: show overflow tags (files beyond the detailed view)
@@ -281,58 +284,120 @@ class DirectoryRenderer:
         self,
         tag: Tag,
         detail_level: DetailLevel,
-        seen_patterns: Optional[set] = None
-    ) -> str:
-        """Render a symbol name at the specified detail level.
+        seen_patterns: Optional[set] = None,
+        name_color: str = "yellow"
+    ) -> Text:
+        """Render a symbol with syntax highlighting.
 
         Args:
             tag: The tag to render
             detail_level: LOW (name only), MEDIUM (with params), HIGH (full sig)
             seen_patterns: For HIGH detail, tracks seen param:type patterns for dedup
+            name_color: Color for the function/method name
 
         Returns:
-            Rendered symbol string (e.g., "connect", "connect(hobo, remote)",
-            or "connect(hobo: HoboWindow) -> bool")
+            Rich Text object with syntax-highlighted symbol
         """
+        result = Text()
         name = tag.name
 
         if detail_level == DetailLevel.LOW:
-            # Just the name - fields are shown separately in hierarchy
-            return name
+            result.append(name, style=name_color)
+            return result
 
         # MEDIUM or HIGH: include signature for functions
         if tag.node_type in ("function", "method") and tag.signature:
-            sig_str = tag.signature.render(detail_level, seen_patterns)
-            return f"{name}{sig_str}"
+            result.append(name, style=name_color)
+            result.append("(", style=get_token_color("("))
+
+            params = tag.signature.parameters
+            for i, (param_name, param_type) in enumerate(params):
+                if i > 0:
+                    result.append(", ", style=get_token_color(","))
+
+                # Check deduplication for HIGH detail
+                show_type = False
+                if detail_level == DetailLevel.HIGH and param_type:
+                    pattern = f"{param_name}:{param_type}"
+                    if seen_patterns is not None:
+                        if pattern not in seen_patterns:
+                            seen_patterns.add(pattern)
+                            show_type = True
+                    else:
+                        show_type = True
+
+                result.append(param_name, style="white")
+                if show_type and param_type:
+                    result.append(": ", style=get_token_color(":"))
+                    result.append(param_type, style=get_token_color("type"))
+
+            result.append(")", style=get_token_color(")"))
+
+            # Return type for HIGH detail
+            if detail_level == DetailLevel.HIGH and tag.signature.return_type:
+                result.append(" -> ", style=get_token_color("->"))
+                result.append(tag.signature.return_type, style=get_token_color("type"))
+
+            return result
 
         # MEDIUM or HIGH: include fields for classes
         if tag.node_type == "class" and tag.fields:
-            if detail_level == DetailLevel.MEDIUM:
-                # Simplified: just field names
-                field_names = ", ".join(f.name for f in tag.fields[:5])
-                if len(tag.fields) > 5:
-                    field_names += f", +{len(tag.fields) - 5}"
-                return f"{name}({field_names})"
-            else:  # HIGH
-                # Full field types
-                field_strs = [f.render(detail_level) for f in tag.fields[:5]]
-                if len(tag.fields) > 5:
-                    field_strs.append(f"+{len(tag.fields) - 5}")
-                return f"{name}({', '.join(field_strs)})"
+            result.append(name, style=name_color)
+            result.append("(", style=get_token_color("("))
 
-        return name
+            fields_to_show = tag.fields[:5]
+            for i, field in enumerate(fields_to_show):
+                if i > 0:
+                    result.append(", ", style=get_token_color(","))
+
+                result.append(field.name, style="white")
+                if detail_level == DetailLevel.HIGH and field.type_annotation:
+                    result.append(": ", style=get_token_color(":"))
+                    result.append(field.type_annotation, style=get_token_color("type"))
+
+            if len(tag.fields) > 5:
+                result.append(f", +{len(tag.fields) - 5}", style="dim white")
+
+            result.append(")", style=get_token_color(")"))
+            return result
+
+        result.append(name, style=name_color)
+        return result
+
+    def _render_field(self, field, detail_level: DetailLevel) -> Text:
+        """Render a field with syntax highlighting.
+
+        Args:
+            field: FieldInfo object
+            detail_level: Detail level for rendering
+
+        Returns:
+            Rich Text object with highlighted field
+        """
+        result = Text()
+        result.append(field.name, style="bright_cyan")
+
+        if detail_level == DetailLevel.HIGH and field.type_annotation:
+            result.append(": ", style=get_token_color(":"))
+            result.append(field.type_annotation, style=get_token_color("type"))
+        elif detail_level == DetailLevel.MEDIUM and field.type_annotation:
+            # Simplified type
+            simple_type = field.type_annotation.split('[')[0]
+            result.append(": ", style=get_token_color(":"))
+            result.append(simple_type, style=get_token_color("type"))
+
+        return result
 
     def _render_labeled_list(
         self,
         console: Console,
-        items: List[str],
+        items: List[Text],
         indent: str,
         label: str,
         term_width: int,
-        label_color: str,
-        item_color: str
+        label_color: str
     ) -> None:
-        """Render a labeled list with inline label and aligned continuations.
+        """Render a labeled list of Text objects with wrapping.
 
         Output format:
             {indent}{label}: item1, item2, item3, ...
@@ -351,7 +416,7 @@ class DirectoryRenderer:
 
         for i, item in enumerate(items):
             sep = ", " if i > 0 else ""
-            item_len = len(sep) + len(item)
+            item_len = len(sep) + len(item.plain)
 
             # Wrap if needed
             if i > 0 and current_length + item_len > term_width - 5:
@@ -363,7 +428,7 @@ class DirectoryRenderer:
 
             if sep:
                 line.append(sep, style="dim white")
-            line.append(item, style=item_color)
+            line.append_text(item)
             current_length += item_len
 
         if line:
@@ -379,10 +444,13 @@ class DirectoryRenderer:
         label: str,
         term_width: int,
         label_color: str,
-        item_color: str
+        name_color: str
     ) -> None:
-        """Render a labeled list of symbols with wrapping."""
+        """Render a labeled list of symbols with syntax highlighting."""
         if not tags_list:
             return
-        items = [self._render_symbol(tag, detail_level, seen_patterns) for tag in tags_list]
-        self._render_labeled_list(console, items, indent, label, term_width, label_color, item_color)
+        items = [
+            self._render_symbol(tag, detail_level, seen_patterns, name_color)
+            for tag in tags_list
+        ]
+        self._render_labeled_list(console, items, indent, label, term_width, label_color)
