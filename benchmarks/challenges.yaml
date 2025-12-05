@@ -1,0 +1,128 @@
+# Agent Navigation Challenges
+#
+# These challenges test how well agents can navigate codebases using available tools.
+# Run with: ./run_challenges.py <target_repo> [--tools grepmap|grep-only|both]
+#
+# Each challenge measures:
+# - Success: Did the agent find the correct answer?
+# - Tokens: How many tokens consumed (effort proxy)
+# - Strategy: What tools/patterns did they reach for?
+#
+# Analysis goal: Identify missing affordances in grepmap by watching agent workarounds.
+
+challenges:
+
+  # === LOCATION CHALLENGES ===
+  # "Where is X?" - tests basic symbol discovery
+
+  - id: locate_entry_point
+    category: location
+    difficulty: easy
+    question: "Where is the main entry point of this application? Give the file and line number."
+    validation: "must mention main entry file"
+
+  - id: locate_class_definition
+    category: location
+    difficulty: easy
+    question: "Where is the {target_class} class defined? File and line number."
+    params:
+      target_class: "auto-detect from repo"
+    validation: "must give correct file:line"
+
+  - id: locate_config
+    category: location
+    difficulty: medium
+    question: "Where are configuration values loaded from? Trace back to the source."
+    validation: "must identify config file(s) and loading mechanism"
+
+  # === RELATIONSHIP CHALLENGES ===
+  # "How does X connect to Y?" - tests understanding of structure
+
+  - id: trace_import_chain
+    category: relationship
+    difficulty: medium
+    question: "Trace the import chain from {file_a} to {file_b}. What's the path?"
+    params:
+      file_a: "auto-detect"
+      file_b: "auto-detect"
+    validation: "must show A → ... → B import path"
+
+  - id: find_callers
+    category: relationship
+    difficulty: medium
+    question: "What functions/methods call {target_function}? List all call sites."
+    params:
+      target_function: "auto-detect important function"
+    validation: "must list call sites with file:line"
+
+  - id: understand_data_flow
+    category: relationship
+    difficulty: hard
+    question: "How does data flow from {source} to {sink}? Describe the transformation pipeline."
+    params:
+      source: "auto-detect input point"
+      sink: "auto-detect output point"
+    validation: "must describe intermediate steps"
+
+  # === COMPREHENSION CHALLENGES ===
+  # "What does X do?" - tests holistic understanding
+
+  - id: explain_module_purpose
+    category: comprehension
+    difficulty: easy
+    question: "What is the purpose of the {module} module? Summarize in 2-3 sentences."
+    params:
+      module: "auto-detect"
+    validation: "summary must be accurate"
+
+  - id: identify_pattern
+    category: comprehension
+    difficulty: medium
+    question: "What design pattern is used for {component}? How is it implemented here?"
+    params:
+      component: "auto-detect"
+    validation: "must correctly identify pattern"
+
+  - id: find_bug_location
+    category: comprehension
+    difficulty: hard
+    question: "Given this error: '{error_message}', where would you look to fix it?"
+    params:
+      error_message: "synthetic or real error"
+    validation: "must identify relevant code area"
+
+  # === MODIFICATION CHALLENGES ===
+  # "How would I change X?" - tests actionable understanding
+
+  - id: add_feature_planning
+    category: modification
+    difficulty: medium
+    question: "If you wanted to add {feature}, what files would need to change?"
+    params:
+      feature: "auto-detect reasonable feature"
+    validation: "must identify correct files"
+
+  - id: refactor_suggestion
+    category: modification
+    difficulty: hard
+    question: "What's the most impactful refactor you'd suggest for this codebase?"
+    validation: "suggestion must be reasonable and specific"
+
+# === META CONFIG ===
+config:
+  timeout_seconds: 300
+  max_tokens: 50000  # budget ceiling
+
+  # Tool configurations to test
+  tool_configs:
+    grepmap:
+      setup: "Available tool: grepmap <path> [--chat-files ...] [--map-tokens N]"
+      allowed_commands: ["grepmap", "cat", "head"]
+
+    grep_only:
+      setup: "Available tools: rg (ripgrep), find, cat, head, tail"
+      allowed_commands: ["rg", "find", "cat", "head", "tail", "ls"]
+
+    both:
+      setup: "Available tools: grepmap, rg, find, cat, head, tail"
+      allowed_commands: ["grepmap", "rg", "find", "cat", "head", "tail", "ls"]
