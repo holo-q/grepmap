@@ -6,29 +6,9 @@ from typing import List, Optional, Dict, Any
 
 from fastmcp import FastMCP, settings
 from grepmap_class import GrepMap
+from grepmap.discovery import find_source_files
 from utils import count_tokens, read_text
 
-# File extensions excluded from directory scans by default.
-# Markdown files can still be processed when explicitly specified via chat_files or other_files.
-EXCLUDED_EXTENSIONS = {'.md', '.markdown', '.mdown', '.mkd'}
-
-
-def _is_excluded_by_default(filename: str) -> bool:
-    """Check if a file should be excluded from directory scans by default."""
-    return any(filename.lower().endswith(ext) for ext in EXCLUDED_EXTENSIONS)
-
-
-def find_src_files(directory: str) -> List[str]:
-    """Find source files in a directory, excluding markdown by default."""
-    if not os.path.isdir(directory):
-        return [directory] if os.path.isfile(directory) else []
-    src_files = []
-    for r, d, f_list in os.walk(directory):
-        d[:] = [d_name for d_name in d if not d_name.startswith('.') and d_name not in {'node_modules', '__pycache__', 'venv', 'env'}]
-        for f in f_list:
-            if not f.startswith('.') and not _is_excluded_by_default(f):
-                src_files.append(os.path.join(r, f))
-    return src_files
 
 # Configure logging - only show errors
 root_logger = logging.getLogger()
@@ -140,7 +120,7 @@ async def grep_map(
         effective_other_files = other_files
     else:
         log.info("No other_files provided, scanning root directory for context...")
-        effective_other_files = find_src_files(project_root)
+        effective_other_files = find_source_files(project_root)
 
     # Add a print statement for debugging so you can see what the tool is working with.
     log.debug(f"Chat files: {chat_files_list}")
@@ -265,7 +245,7 @@ async def search_identifiers(
         )
 
         # Find all source files in the project
-        all_files = find_src_files(project_root)
+        all_files = find_source_files(project_root)
 
         # Get all tags (definitions and references) for all files
         all_tags = []

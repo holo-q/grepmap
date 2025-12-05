@@ -15,6 +15,10 @@ in a chat file gets 20x * 10x = 200x boost).
 
 from typing import List, Dict, Set, Optional, Callable
 from grepmap.core.types import Tag, RankedTag
+from grepmap.core.config import (
+    BOOST_MENTIONED_IDENT, BOOST_MENTIONED_FILE, BOOST_CHAT_FILE,
+    EXCLUDE_UNRANKED_THRESHOLD
+)
 
 
 class BoostCalculator:
@@ -90,7 +94,7 @@ class BoostCalculator:
 
             # Exclude files with low PageRank if exclude_unranked is True
             # Use a small threshold to exclude near-zero ranks (likely disconnected nodes)
-            if self.exclude_unranked and file_rank <= 0.0001:
+            if self.exclude_unranked and file_rank <= EXCLUDE_UNRANKED_THRESHOLD:
                 continue
 
             tags = tags_by_file.get(fname, [])
@@ -125,13 +129,15 @@ class BoostCalculator:
     ) -> float:
         """Calculate multiplicative boost for a single tag.
 
-        Boosts are applied in order and multiply together:
+        Boosts are applied in order and multiply together using
+        configurable values from grepmap.core.config:
         1. Base boost: 1.0 (no boost)
-        2. If identifier is mentioned: multiply by 10.0
-        3. If file is mentioned: multiply by 5.0
-        4. If file is in chat: multiply by 20.0
+        2. If identifier is mentioned: multiply by BOOST_MENTIONED_IDENT
+        3. If file is mentioned: multiply by BOOST_MENTIONED_FILE
+        4. If file is in chat: multiply by BOOST_CHAT_FILE
 
-        Example: A mentioned identifier in a chat file gets 1.0 * 10.0 * 20.0 = 200.0
+        Example: A mentioned identifier in a chat file gets
+                 1.0 * BOOST_MENTIONED_IDENT * BOOST_CHAT_FILE
 
         Args:
             tag: The tag to boost
@@ -141,20 +147,20 @@ class BoostCalculator:
             mentioned_idents: Set of mentioned identifier names
 
         Returns:
-            Multiplicative boost factor (typically 1.0 to 200.0)
+            Multiplicative boost factor
         """
         boost = 1.0
 
         # Boost for mentioned identifiers (strongest individual signal)
         if tag.name in mentioned_idents:
-            boost *= 10.0
+            boost *= BOOST_MENTIONED_IDENT
 
         # Boost for mentioned files
         if rel_fname in mentioned_fnames:
-            boost *= 5.0
+            boost *= BOOST_MENTIONED_FILE
 
         # Boost for chat files (strongest file-level signal)
         if rel_fname in chat_rel_fnames:
-            boost *= 20.0
+            boost *= BOOST_CHAT_FILE
 
         return boost

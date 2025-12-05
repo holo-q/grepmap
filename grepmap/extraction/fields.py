@@ -11,6 +11,7 @@ definitions can be shown with varying levels of type annotation detail.
 
 from typing import Optional, Tuple
 from grepmap.core.types import FieldInfo
+from grepmap.core.config import MAX_CLASS_FIELDS
 
 
 def extract_class_fields(class_node, code_bytes: bytes) -> Optional[Tuple[FieldInfo, ...]]:
@@ -59,7 +60,7 @@ def extract_class_fields(class_node, code_bytes: bytes) -> Optional[Tuple[FieldI
 
     # Walk through statements in the class body
     for stmt in body.children:
-        if len(fields) >= 10:  # Limit to 10 fields for concise output
+        if len(fields) >= MAX_CLASS_FIELDS:
             break
 
         # Look for annotated assignments: field: Type or field: Type = value

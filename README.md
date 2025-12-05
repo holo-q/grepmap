@@ -158,11 +158,11 @@ Add to your MCP config (e.g., `~/.config/claude/claude_desktop_config.json`):
 If you prefer CLI invocation over MCP, add this to your project's `CLAUDE.md`:
 
 ```markdown
-## Codebase Navigation: Topology-Aware Sampling
+=== Codebase Navigation: Topology-Aware Sampling ===
 
 `grepmap` provides density-optimized structural maps of codebases using PageRank over dependency graphs.
 
-### What It Samples
+=== What It Samples ===
 
 **Not** alphabetical listings or random file walks. **Yes** graph-theoretic importance:
 - Parses all code with tree-sitter (functions, classes, imports, references)
@@ -172,7 +172,7 @@ If you prefer CLI invocation over MCP, add this to your project's `CLAUDE.md`:
 
 **Result**: You see files ranked by *transitive importance* (what depends on what), not file size or proximity.
 
-### Topology Preservation
+=== Topology Preservation ===
 
 The output maintains **directory hierarchy** and **class structure**:
 - Directory nesting shows architectural layers
@@ -185,30 +185,21 @@ The output maintains **directory hierarchy** and **class structure**:
 - Shows "main characters" first, demotes vendor/generated code
 - Overflow section lists additional files at low resolution for extended orientation
 
-### Usage Patterns
+=== Usage Patterns ===
 
 **Orient first** (prevent random file diving):
-```bash
-uvx grepmap .  # Ranked overview, ~8k tokens
 uvx grepmap . --map-tokens 4096  # Denser for smaller budgets
-```
 
 **Focus on active work** (boost specific files in ranking):
-```bash
 uvx grepmap . --chat-files src/session.py src/renderer.py
-```
 
 **Deep dive one file** (complete symbol listing with signatures):
-```bash
 uvx grepmap src/gui/component.py --tree
-```
 
 **After modifying graph** (cache invalidation):
-```bash
 uvx grepmap . --force-refresh
-```
 
-### Information Density Characteristics
+=== Information Density Characteristics ===
 
 - **Breadth**: Covers entire dependency graph, not just git root files
 - **Sampling**: PageRank surfaces central nodes; depth penalty demotes leaf files
@@ -217,7 +208,7 @@ uvx grepmap . --force-refresh
 - **Scale**: Binary search finds maximum coverage within token budget
 - **Causality**: High-ranked files are *dependencies* of many others (causal anchors)
 
-### Workflow: GPS → Microscope
+Workflow: GPS → Microscope
 
 1. **Orient** (`grepmap .`) — learn graph topology, identify VIP files
 2. **Hypothesize** — "session management probably in high-ranked session.py"

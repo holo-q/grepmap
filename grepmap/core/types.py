@@ -56,10 +56,13 @@ class SignatureInfo:
                    Type annotation may be None if not provided in source.
         return_type: Return type annotation as string, or None if not specified.
         decorators: Tuple of decorator names (e.g., "staticmethod", "property").
+        raw: Optional pre-formatted string (used for markdown section previews).
+             When set, render() returns this directly instead of building from params.
     """
     parameters: Tuple[Tuple[str, Optional[str]], ...]  # ((name, type_annotation), ...)
     return_type: Optional[str]
     decorators: Tuple[str, ...]  # ("staticmethod", "property", ...)
+    raw: Optional[str] = None  # Pre-formatted content (e.g., markdown section preview)
 
     def render(self, detail: DetailLevel, seen_patterns: Optional[set] = None) -> str:
         """Render signature at specified detail level with optional deduplication.
@@ -77,6 +80,10 @@ class SignatureInfo:
         Returns:
             Formatted string like "(param1, param2) -> ReturnType" appropriate for detail level.
         """
+        # If raw content is set (e.g., markdown preview), return it directly
+        if self.raw is not None:
+            return f'— "{self.raw}"'
+
         if detail == DetailLevel.LOW:
             return "..."
 

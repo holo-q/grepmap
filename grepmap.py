@@ -8,165 +8,12 @@ Uses Tree-sitter for parsing and PageRank for ranking importance.
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
-from typing import List
 
 from utils import count_tokens, read_text
 from grepmap_class import GrepMap
-
-
-def get_source_dirs_from_pyproject(directory: str) -> List[str]:
-    """Extract source directories from pyproject.toml if it exists."""
-    pyproject_path = Path(directory) / "pyproject.toml"
-    if not pyproject_path.exists():
-        return []
-
-    import tomllib  # Python 3.11+ (required by project)
-
-    try:
-        with open(pyproject_path, 'rb') as f:
-            data = tomllib.load(f)
-
-        src_dirs = []
-
-        # Check [tool.ty.src] for type checker source configuration
-        ty_config = data.get('tool', {}).get('ty', {}).get('src', {})
-        if 'include' in ty_config:
-            includes = ty_config['include']
-            if isinstance(includes, list):
-                src_dirs.extend(includes)
-
-        # Check [tool.setuptools] for packages or py-modules
-        setuptools = data.get('tool', {}).get('setuptools', {})
-
-        # Handle packages (list of package names or find directive)
-        if 'packages' in setuptools:
-            packages = setuptools['packages']
-            if isinstance(packages, list):
-                src_dirs.extend(packages)
-
-        # Handle py-modules (individual module files)
-        if 'py-modules' in setuptools:
-            modules = setuptools['py-modules']
-            if isinstance(modules, list):
-                # These are typically in the root, but we'll add them as potential files
-                for module in modules:
-                    module_path = Path(directory) / f"{module}.py"
-                    if module_path.exists():
-                        src_dirs.append(str(module_path))
-
-        # Check for package-dir (custom source directory mapping)
-        if 'package-dir' in setuptools:
-            pkg_dir = setuptools['package-dir']
-            if isinstance(pkg_dir, dict) and '' in pkg_dir:
-                src_dirs.append(pkg_dir[''])
-
-        # Common convention: check if 'src' directory exists
-        src_path = Path(directory) / "src"
-        if src_path.exists() and src_path.is_dir() and "src" not in src_dirs:
-            src_dirs.append("src")
-
-        return src_dirs
-    except Exception:
-        return []
-
-
-def find_src_files(directory: str) -> List[str]:
-    """Find source files in a directory, respecting .gitignore if in a git repo.
-
-    Logic: pyproject.toml defines what to include, gitignore defines what to exclude.
-    If pyproject.toml specifies source dirs, we start with those and apply gitignore filtering.
-    """
-    if not os.path.isdir(directory):
-        return [directory] if os.path.isfile(directory) else []
-
-    import subprocess
-
-    # Check if pyproject.toml defines source directories
-    src_dirs = get_source_dirs_from_pyproject(directory)
-
-    # Try using git to respect .gitignore
-    try:
-        if src_dirs:
-            # pyproject.toml specifies source dirs - run git ls-files on each dir
-            # This gives us: files in source dirs that aren't gitignored
-            src_files = []
-            for src_dir in src_dirs:
-                src_path = Path(directory) / src_dir
-
-                # Handle individual .py files
-                if src_dir.endswith('.py') and src_path.is_file():
-                    # Check if file is tracked by git (not ignored)
-                    result = subprocess.run(
-                        ['git', 'ls-files', '--error-unmatch', src_dir],
-                        cwd=directory,
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if result.returncode == 0:
-                        src_files.append(str(src_path))
-                # Handle directories
-                elif src_path.is_dir():
-                    result = subprocess.run(
-                        ['git', 'ls-files', src_dir],
-                        cwd=directory,
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-                    if result.returncode == 0:
-                        for line in result.stdout.strip().split('\n'):
-                            if line:
-                                full_path = Path(directory) / line
-                                if full_path.is_file():
-                                    src_files.append(str(full_path))
-            return src_files
-        else:
-            # No pyproject.toml - use git ls-files for everything
-            result = subprocess.run(
-                ['git', 'ls-files'],
-                cwd=directory,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                src_files = []
-                for line in result.stdout.strip().split('\n'):
-                    if line:
-                        full_path = os.path.join(directory, line)
-                        if os.path.isfile(full_path):
-                            src_files.append(full_path)
-                return src_files
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # Git not available or timed out, fall back to manual walk
-        pass
-
-    # Fallback: manual walk (less reliable, doesn't respect .gitignore)
-    # If src_dirs specified, only walk those; otherwise walk everything
-    src_files = []
-    if src_dirs:
-        for src_dir in src_dirs:
-            src_path = Path(directory) / src_dir
-            if src_path.is_file() and src_dir.endswith('.py'):
-                src_files.append(str(src_path))
-            elif src_path.is_dir():
-                for root, dirs, files in os.walk(src_path):
-                    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in {'node_modules', '__pycache__', 'venv', 'env'}]
-                    for file in files:
-                        if not file.startswith('.'):
-                            src_files.append(os.path.join(root, file))
-    else:
-        for root, dirs, files in os.walk(directory):
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in {'node_modules', '__pycache__', 'venv', 'env'}]
-            for file in files:
-                if not file.startswith('.'):
-                    src_files.append(os.path.join(root, file))
-
-    return src_files
+from grepmap.discovery import find_source_files
 
 
 def tool_output(*messages):
@@ -289,6 +136,13 @@ Examples:
         help="Clear the tags cache before running (useful for testing or fixing corrupted cache)"
     )
 
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show compact diagnostics (LOC, def counts) instead of code content. "
+             "Packs many more files into token budget for rapid complexity assessment."
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -306,7 +160,7 @@ Examples:
     chat_files_from_args = args.chat_files or [] # These are the paths as strings from the CLI
     
     # Determine the list of unresolved path specifications that will form the 'other_files'
-    # These can be files or directories. find_src_files will expand them.
+    # These can be files or directories. find_source_files will expand them.
     unresolved_paths_for_other_files_specs = []
     if args.other_files:  # If --other-files is explicitly provided, it's the source
         unresolved_paths_for_other_files_specs.extend(args.other_files)
@@ -315,10 +169,10 @@ Examples:
     # If neither, unresolved_paths_for_other_files_specs remains empty.
 
     # Now, expand all directory paths in unresolved_paths_for_other_files_specs into actual file lists
-    # and collect all file paths. find_src_files handles both files and directories.
+    # and collect all file paths. find_source_files handles both files and directories.
     effective_other_files_unresolved = []
     for path_spec_str in unresolved_paths_for_other_files_specs:
-        effective_other_files_unresolved.extend(find_src_files(path_spec_str))
+        effective_other_files_unresolved.extend(find_source_files(path_spec_str))
     
     # Convert to absolute paths
     chat_files = [str(Path(f).resolve()) for f in chat_files_from_args]
@@ -404,7 +258,8 @@ Examples:
         max_context_window=args.max_context_window,
         exclude_unranked=args.exclude_unranked,
         color=not args.no_color,
-        directory_mode=use_directory_mode
+        directory_mode=use_directory_mode,
+        stats_mode=args.stats
     )
     
     # Generate the map

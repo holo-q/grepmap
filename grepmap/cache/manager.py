@@ -12,7 +12,7 @@ from grepmap.core.types import Tag
 
 
 # Cache version - bump when Tag structure changes
-CACHE_VERSION = 5
+CACHE_VERSION = 6  # Bumped: field extraction improvements
 TAGS_CACHE_DIR = f".grepmap.tags.cache.v{CACHE_VERSION}"
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError)
 

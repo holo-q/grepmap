@@ -17,10 +17,14 @@ from pathlib import Path
 from typing import List, Dict, Set, Optional, Tuple, Callable
 
 from grepmap.core.types import Tag, RankedTag, DetailLevel, FileReport
+from grepmap.core.config import (
+    DEFAULT_MAP_TOKENS, MAP_MUL_NO_FILES, CONTEXT_WINDOW_PADDING,
+    OVERFLOW_COUNT, TOKEN_COUNT_FULL_THRESHOLD, TOKEN_COUNT_SAMPLE_LINES
+)
 from grepmap.cache import CacheManager
 from grepmap.extraction import get_tags_raw, extract_signature_info, extract_class_fields
 from grepmap.ranking import PageRanker, BoostCalculator, Optimizer
-from grepmap.rendering import TreeRenderer, DirectoryRenderer
+from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer
 from utils import count_tokens, read_text
 
 
@@ -48,7 +52,7 @@ class GrepMap:
     
     def __init__(
         self,
-        map_tokens: int = 1024,
+        map_tokens: int = DEFAULT_MAP_TOKENS,
         root: Optional[str] = None,
         token_counter_func: Callable[[str], int] = count_tokens,
         file_reader_func: Callable[[str], Optional[str]] = read_text,
@@ -56,11 +60,12 @@ class GrepMap:
         repo_content_prefix: Optional[str] = None,
         verbose: bool = False,
         max_context_window: Optional[int] = None,
-        map_mul_no_files: int = 8,
+        map_mul_no_files: int = MAP_MUL_NO_FILES,
         refresh: str = "auto",
         exclude_unranked: bool = False,
         color: bool = True,
-        directory_mode: bool = True
+        directory_mode: bool = True,
+        stats_mode: bool = False
     ):
         """Initialize GrepMap facade and all subsystems."""
         # Core settings
@@ -77,6 +82,7 @@ class GrepMap:
         self.exclude_unranked = exclude_unranked
         self.color = color
         self.directory_mode = directory_mode
+        self.stats_mode = stats_mode
         
         # Set up output handlers
         if output_handler_funcs is None:
@@ -137,6 +143,14 @@ class GrepMap:
             verbose=self.verbose,
             output_handler=self.output_handlers['info']
         )
+
+        self.stats_renderer = StatsRenderer(
+            root=self.root,
+            file_reader=self.read_text_func_internal,
+            token_counter=self.token_count,
+            verbose=self.verbose,
+            output_handler=self.output_handlers['info']
+        )
     
     # =========================================================================
     # Public API - Main entry points
@@ -179,8 +193,7 @@ class GrepMap:
         # Adjust max_map_tokens if no chat files
         max_map_tokens = self.max_map_tokens
         if not chat_files and self.max_context_window:
-            padding = 1024
-            available = self.max_context_window - padding
+            available = self.max_context_window - CONTEXT_WINDOW_PADDING
             max_map_tokens = min(
                 max_map_tokens * self.map_mul_no_files,
                 available
@@ -254,23 +267,40 @@ class GrepMap:
         mentioned_idents: Optional[Set[str]] = None
     ) -> Tuple[Optional[str], FileReport]:
         """Generate the ranked tags map without caching.
-        
+
         Orchestrates the full pipeline:
         1. Extract and rank tags (PageRank + boosts)
         2. Optimize rendering configuration (coverage vs detail tradeoff)
         3. Render with selected configuration
         4. Add overflow section if in directory mode
+
+        In stats_mode, bypasses optimization and renders compact file statistics.
         """
         # Step 1: Get ranked tags using PageRank + boosts
         ranked_tags, file_report = self.get_ranked_tags(
             chat_fnames, other_fnames, mentioned_fnames, mentioned_idents
         )
-        
+
         if not ranked_tags:
             return None, file_report
-        
+
         chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
         n = len(ranked_tags)
+
+        # Stats mode: compact diagnostics view (LOC, def counts)
+        # Bypasses optimizer since stats are very compact
+        # tree_view=True when --tree flag is passed (directory_mode=False)
+        if self.stats_mode:
+            output = self.stats_renderer.render(
+                ranked_tags, chat_rel_fnames,
+                tree_view=not self.directory_mode
+            )
+            if self.verbose:
+                tokens = self.token_count(output)
+                self.output_handlers['info'](
+                    f"Stats mode: {n} tags from {file_report.total_files_considered} files, {tokens} tokens"
+                )
+            return output, file_report
         
         # For non-directory mode, only use LOW detail (tree view handles its own formatting)
         if self.directory_mode:
@@ -314,7 +344,7 @@ class GrepMap:
         # Step 4: Re-render with overflow tags for "also in scope" section
         if self.directory_mode and len(selected_tags) < n:
             num_selected = len(selected_tags)
-            overflow_count = min(2000, n - num_selected)
+            overflow_count = min(OVERFLOW_COUNT, n - num_selected)
             overflow = ranked_tags[num_selected:num_selected + overflow_count]
             output = self.directory_renderer.render(
                 selected_tags, chat_rel_fnames, detail, overflow_tags=overflow
@@ -476,14 +506,14 @@ class GrepMap:
             return 0
 
         len_text = len(text)
-        if len_text < 200:
+        if len_text < TOKEN_COUNT_FULL_THRESHOLD:
             return self.token_count_func_internal(text)
 
         # Sample for longer texts
         lines = text.splitlines(keepends=True)
         num_lines = len(lines)
 
-        step = max(1, num_lines // 100)
+        step = max(1, num_lines // TOKEN_COUNT_SAMPLE_LINES)
         sampled_lines = lines[::step]
         sample_text = "".join(sampled_lines)
         

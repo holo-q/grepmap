@@ -19,6 +19,7 @@ within the available token budget.
 
 from typing import List, Optional, Tuple, Callable
 from grepmap.core.types import RankedTag, DetailLevel
+from grepmap.core.config import SCORE_COVERAGE_WEIGHT, SCORE_DETAIL_WEIGHT, OVERFLOW_COUNT
 
 
 class Optimizer:
@@ -100,9 +101,10 @@ class Optimizer:
                 self.output_handlers['info']("No config fits budget, using minimal fallback")
             raise ValueError("No configuration fits within token budget")
 
-        # Pick config with highest score: num_tags * 10 + detail_level
-        # This strongly favors coverage over detail
-        best = max(best_configs, key=lambda x: x[0] * 10 + x[1].value)
+        # Pick config with highest score using configurable weights
+        # Score = num_tags * SCORE_COVERAGE_WEIGHT + detail_level * SCORE_DETAIL_WEIGHT
+        # Default values strongly favor coverage over detail
+        best = max(best_configs, key=lambda x: x[0] * SCORE_COVERAGE_WEIGHT + x[1].value * SCORE_DETAIL_WEIGHT)
         num_tags, detail, output, tokens = best
 
         if self.verbose:
@@ -165,7 +167,7 @@ class Optimizer:
         max_tokens: int,
         renderer_with_overflow: Callable[[List[RankedTag], DetailLevel, List[RankedTag]], str],
         detail_levels: Optional[List[DetailLevel]] = None,
-        overflow_count: int = 2000
+        overflow_count: int = OVERFLOW_COUNT
     ) -> Tuple[List[RankedTag], DetailLevel, str, int]:
         """Find optimal config with overflow tags for low-res "also in scope" section.
 

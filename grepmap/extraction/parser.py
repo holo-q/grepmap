@@ -289,17 +289,18 @@ def get_tags_raw(
     read_text_func: Callable[[str], Optional[str]],
     error_handler: Optional[Callable[[str], None]] = None
 ) -> List[Tag]:
-    """Parse file to extract tags using Tree-sitter.
+    """Parse file to extract tags using Tree-sitter (or regex for markdown).
 
     This is a convenience function that combines TagParser creation and
     tag extraction in a single call. It's the main entry point for
     extracting tags from a file.
 
     The function:
-    1. Creates a TagParser for the file's language
-    2. Reads the file content
-    3. Parses and extracts tags
-    4. Returns the tag list
+    1. For markdown files: uses regex-based header extraction
+    2. For code files: creates a TagParser for the file's language
+    3. Reads the file content
+    4. Parses and extracts tags
+    5. Returns the tag list
 
     Args:
         fname: Absolute file path to parse
@@ -310,6 +311,14 @@ def get_tags_raw(
     Returns:
         List of extracted Tag objects, or empty list if parsing fails
     """
+    # Handle markdown files specially (no tree-sitter, use regex parser)
+    from grepmap.extraction.markdown import is_markdown_file, parse_markdown_tags
+    if is_markdown_file(fname):
+        code = read_text_func(fname)
+        if not code:
+            return []
+        return parse_markdown_tags(code, fname, rel_fname)
+
     # Create parser for this file's language
     parser = create_tag_parser(fname, error_handler=error_handler)
     if not parser:

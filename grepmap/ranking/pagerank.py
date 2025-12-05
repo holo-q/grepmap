@@ -21,6 +21,13 @@ from collections import defaultdict
 from typing import List, Dict, Optional, Callable
 
 from grepmap.core.types import Tag
+from grepmap.core.config import (
+    PAGERANK_ALPHA,
+    DEPTH_WEIGHT_ROOT, DEPTH_WEIGHT_MODERATE, DEPTH_WEIGHT_DEEP, DEPTH_WEIGHT_VENDOR,
+    DEPTH_THRESHOLD_SHALLOW, DEPTH_THRESHOLD_MODERATE,
+    PAGERANK_CHAT_MULTIPLIER,
+    VENDOR_PATTERNS
+)
 
 
 class PageRanker:
@@ -131,7 +138,7 @@ class PageRanker:
             ranks = nx.pagerank(
                 G,
                 personalization=depth_personalization,
-                alpha=0.85  # 85% follow edges, 15% jump to personalization
+                alpha=PAGERANK_ALPHA
             )
 
             if self.verbose and ranks:
@@ -154,12 +161,13 @@ class PageRanker:
     ) -> Dict[str, float]:
         """Build depth-aware personalization weights for PageRank.
 
-        Personalization biases the random walk toward certain nodes:
-        - Root/shallow files (depth <= 2): weight 1.0
-        - Moderate depth (3-4): weight 0.5
-        - Deep files (5+): weight 0.1
-        - Vendor/third-party: weight 0.01 (strong penalty)
-        - Chat files: multiply by 100x
+        Personalization biases the random walk toward certain nodes using
+        configurable weights from grepmap.core.config:
+        - Root/shallow files: DEPTH_WEIGHT_ROOT
+        - Moderate depth: DEPTH_WEIGHT_MODERATE
+        - Deep files: DEPTH_WEIGHT_DEEP
+        - Vendor/third-party: DEPTH_WEIGHT_VENDOR
+        - Chat files: multiply by PAGERANK_CHAT_MULTIPLIER
 
         Args:
             G: The networkx graph
@@ -171,34 +179,24 @@ class PageRanker:
         depth_personalization = {}
         chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
 
-        # Vendor patterns to detect third-party code
-        vendor_patterns = [
-            'node_modules', 'vendor', 'third_party',
-            'torchhub', '__pycache__', 'site-packages'
-        ]
-
         for node in G.nodes():
             depth = node.count('/')
 
             # Check for vendor/third-party patterns
-            is_vendor = any(pattern in node for pattern in vendor_patterns)
+            is_vendor = any(pattern in node for pattern in VENDOR_PATTERNS)
 
             if is_vendor:
-                # Strong bias against vendor code
-                depth_personalization[node] = 0.01
-            elif depth <= 2:
-                # Strong bias for root/shallow files
-                depth_personalization[node] = 1.0
-            elif depth <= 4:
-                # Moderate bias
-                depth_personalization[node] = 0.5
+                depth_personalization[node] = DEPTH_WEIGHT_VENDOR
+            elif depth <= DEPTH_THRESHOLD_SHALLOW:
+                depth_personalization[node] = DEPTH_WEIGHT_ROOT
+            elif depth <= DEPTH_THRESHOLD_MODERATE:
+                depth_personalization[node] = DEPTH_WEIGHT_MODERATE
             else:
-                # Weak bias for deep files (but graph can override)
-                depth_personalization[node] = 0.1
+                depth_personalization[node] = DEPTH_WEIGHT_DEEP
 
             # Apply chat file boost by multiplication
             if node in chat_rel_fnames:
-                depth_personalization[node] *= 100.0
+                depth_personalization[node] *= PAGERANK_CHAT_MULTIPLIER
 
         return depth_personalization
 

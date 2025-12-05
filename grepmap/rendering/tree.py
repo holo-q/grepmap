@@ -88,6 +88,8 @@ class TreeRenderer:
         )
 
         tree_parts = []
+        # Only show rank when multiple files (single file is always 1.0, no info)
+        show_rank = len(sorted_files) > 1
 
         for rel_fname, file_tag_list in sorted_files:
             # Get lines of interest and tags
@@ -103,16 +105,21 @@ class TreeRenderer:
             # Render the tree for this file (pass tags for semantic coloring)
             rendered = self._render_tree(abs_fname, rel_fname, lois, file_tags_only)
             if rendered:
-                # Add rank value to the output
                 rendered_lines = rendered.splitlines()
                 first_line = rendered_lines[0]
                 code_lines = rendered_lines[1:]
 
-                tree_parts.append(
-                    f"{first_line}\n"
-                    f"(Rank value: {max_rank:.4f})\n\n"  # Extra newline for readability
-                    + "\n".join(code_lines)
-                )
+                if show_rank:
+                    tree_parts.append(
+                        f"{first_line}\n"
+                        f"(Rank: {max_rank:.4f})\n\n"
+                        + "\n".join(code_lines)
+                    )
+                else:
+                    tree_parts.append(
+                        f"{first_line}\n"
+                        + "\n".join(code_lines)
+                    )
 
         return "\n\n".join(tree_parts)
 
@@ -237,6 +244,12 @@ class TreeRenderer:
                             keyword_match = line_text.split(tag.name)[0].strip()
                             line_text = f"{keyword_match} {tag.name}{sig_rendered}"
 
+                    # Handle markdown headers: append section preview snippet
+                    # Markdown headers (h1-h6) store section preview in signature.raw
+                    markdown_preview = None
+                    if tag and tag.node_type.startswith('h') and tag.signature and tag.signature.raw:
+                        markdown_preview = tag.signature.render(DetailLevel.HIGH)
+
                     if tree:
                         # Use tree-sitter for granular token coloring
                         rich_line = self._colorize_line_with_tree_sitter(
@@ -248,12 +261,18 @@ class TreeRenderer:
                         if should_strip_colon:
                             rich_line = self._strip_trailing_colon(rich_line)
 
+                        # Append markdown section preview in dim style
+                        if markdown_preview:
+                            rich_line.append(f" {markdown_preview}", style="dim")
+
                         console.print(rich_line)
                     else:
                         # Fallback to simple coloring
                         if should_strip_colon:
                             line_text = line_text.rstrip(':').rstrip()
                         line_output = f"{loi:4d}: {indent}{line_text}"
+                        if markdown_preview:
+                            line_output += f" {markdown_preview}"
                         console.print(line_output, style="white")
 
             # Get the rendered output
