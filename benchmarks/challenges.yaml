@@ -1,112 +1,121 @@
 # Agent Navigation Challenges
 #
-# These challenges test how well agents can navigate codebases using available tools.
+# PURPOSE: Test whether grepmap helps agents understand codebases SEMANTICALLY.
+# These are NOT grep-solvable questions. They require architectural understanding.
+#
+# Good challenges:
+#   - Require understanding relationships, not just finding strings
+#   - Need context about what's important vs noise
+#   - Benefit from knowing the "shape" of the codebase
+#
+# Bad challenges (don't add these):
+#   - "Find class X" (grep solves this)
+#   - "What line has error Y" (grep solves this)
+#   - Anything with an obvious search term
+#
 # Run with: ./run_challenges.py <target_repo> [--tools grepmap|grep-only|both]
-#
-# Each challenge measures:
-# - Success: Did the agent find the correct answer?
-# - Tokens: How many tokens consumed (effort proxy)
-# - Strategy: What tools/patterns did they reach for?
-#
-# Analysis goal: Identify missing affordances in grepmap by watching agent workarounds.
 
 challenges:
 
-  # === LOCATION CHALLENGES ===
-  # "Where is X?" - tests basic symbol discovery
+  # === ARCHITECTURAL UNDERSTANDING ===
+  # These require grasping the overall structure, not finding specific strings
 
-  - id: locate_entry_point
-    category: location
-    difficulty: easy
-    question: "Where is the main entry point of this application? Give the file and line number."
-    validation: "must mention main entry file"
-
-  - id: locate_class_definition
-    category: location
-    difficulty: easy
-    question: "Where is the {target_class} class defined? File and line number."
-    params:
-      target_class: "auto-detect from repo"
-    validation: "must give correct file:line"
-
-  - id: locate_config
-    category: location
+  - id: explain_architecture
+    category: architecture
     difficulty: medium
-    question: "Where are configuration values loaded from? Trace back to the source."
-    validation: "must identify config file(s) and loading mechanism"
+    question: |
+      Explain the high-level architecture of this codebase in 3-4 sentences.
+      What are the major subsystems and how do they relate?
+    validation: "must identify key modules and their relationships"
 
-  # === RELATIONSHIP CHALLENGES ===
-  # "How does X connect to Y?" - tests understanding of structure
-
-  - id: trace_import_chain
-    category: relationship
+  - id: extension_point
+    category: architecture
     difficulty: medium
-    question: "Trace the import chain from {file_a} to {file_b}. What's the path?"
-    params:
-      file_a: "auto-detect"
-      file_b: "auto-detect"
-    validation: "must show A → ... → B import path"
+    question: |
+      If I wanted to add a new output format (like XML export),
+      where would I hook into the existing code? What patterns should I follow?
+    validation: "must identify correct abstraction layer and existing patterns"
 
-  - id: find_callers
-    category: relationship
-    difficulty: medium
-    question: "What functions/methods call {target_function}? List all call sites."
-    params:
-      target_function: "auto-detect important function"
-    validation: "must list call sites with file:line"
-
-  - id: understand_data_flow
-    category: relationship
+  - id: data_journey
+    category: architecture
     difficulty: hard
-    question: "How does data flow from {source} to {sink}? Describe the transformation pipeline."
-    params:
-      source: "auto-detect input point"
-      sink: "auto-detect output point"
-    validation: "must describe intermediate steps"
+    question: |
+      Trace the journey of the primary data structure from input to output.
+      What transformations does it undergo? Where are the key decision points?
+    validation: "must describe transformation pipeline accurately"
 
-  # === COMPREHENSION CHALLENGES ===
-  # "What does X do?" - tests holistic understanding
+  # === SEMANTIC DISCOVERY ===
+  # Finding things when you don't know what to search for
 
-  - id: explain_module_purpose
-    category: comprehension
-    difficulty: easy
-    question: "What is the purpose of the {module} module? Summarize in 2-3 sentences."
-    params:
-      module: "auto-detect"
-    validation: "summary must be accurate"
-
-  - id: identify_pattern
-    category: comprehension
+  - id: find_the_brain
+    category: discovery
     difficulty: medium
-    question: "What design pattern is used for {component}? How is it implemented here?"
-    params:
-      component: "auto-detect"
-    validation: "must correctly identify pattern"
+    question: |
+      What's the most important file in this codebase - the one that
+      orchestrates everything else? How did you determine this?
+    validation: "must identify central orchestrator with reasoning"
 
-  - id: find_bug_location
-    category: comprehension
+  - id: hidden_coupling
+    category: discovery
     difficulty: hard
-    question: "Given this error: '{error_message}', where would you look to fix it?"
-    params:
-      error_message: "synthetic or real error"
-    validation: "must identify relevant code area"
+    question: |
+      Are there any files that seem unrelated but actually change together frequently?
+      What implicit coupling might this reveal?
+    validation: "must identify non-obvious relationships"
 
-  # === MODIFICATION CHALLENGES ===
-  # "How would I change X?" - tests actionable understanding
-
-  - id: add_feature_planning
-    category: modification
+  - id: stability_assessment
+    category: discovery
     difficulty: medium
-    question: "If you wanted to add {feature}, what files would need to change?"
-    params:
-      feature: "auto-detect reasonable feature"
-    validation: "must identify correct files"
+    question: |
+      Which parts of this codebase are stable foundations vs actively evolving?
+      Where would you be most/least confident making changes?
+    validation: "must distinguish stable vs volatile areas with reasoning"
 
-  - id: refactor_suggestion
+  # === DEBUGGING INTUITION ===
+  # Where to look when something goes wrong
+
+  - id: error_provenance
+    category: debugging
+    difficulty: hard
+    question: |
+      If users reported that output was sometimes incomplete or truncated,
+      what are the most likely culprits? Where would you start investigating?
+    validation: "must identify plausible failure points in data flow"
+
+  - id: performance_suspects
+    category: debugging
+    difficulty: medium
+    question: |
+      If this tool was running slowly, what are the likely bottlenecks?
+      What would you profile first?
+    validation: "must identify computational hotspots with reasoning"
+
+  # === MODIFICATION PLANNING ===
+  # Understanding impact of changes
+
+  - id: ripple_effect
     category: modification
     difficulty: hard
-    question: "What's the most impactful refactor you'd suggest for this codebase?"
-    validation: "suggestion must be reasonable and specific"
+    question: |
+      If I changed the signature of the main data structure,
+      what's the blast radius? Which files would need updates?
+    validation: "must identify dependent code accurately"
+
+  - id: safe_refactor
+    category: modification
+    difficulty: medium
+    question: |
+      What's one refactoring you'd suggest that would improve code quality
+      with minimal risk? Why is it low-risk?
+    validation: "suggestion must be specific and risk assessment reasonable"
+
+  - id: test_coverage_gaps
+    category: modification
+    difficulty: medium
+    question: |
+      Looking at the structure of this codebase, what functionality
+      appears to be undertested or has no tests at all?
+    validation: "must identify specific untested areas"
 
 # === META CONFIG ===
 config:
