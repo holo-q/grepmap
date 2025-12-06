@@ -342,6 +342,21 @@ Examples:
         help="Filter by file extensions (comma-separated). Example: -e py,js,ts"
     )
 
+    parser.add_argument(
+        "--viz",
+        action="store_true",
+        help="Launch interactive graph visualizer in browser. "
+             "Explore ranking topology, cycle through focus queries, "
+             "tune heuristics in real-time."
+    )
+
+    parser.add_argument(
+        "--viz-port",
+        type=int,
+        default=8765,
+        help="Port for visualization server (default: 8765)"
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -432,6 +447,21 @@ Examples:
         print(f"Root path: {root_path}")
         if focus_targets:
             print(f"Focus targets: {focus_targets}")
+
+    # Visualization mode: launch interactive graph explorer
+    # This is a live analysis mode for evaluating ranking heuristics
+    if args.viz:
+        if not other_files:
+            # Default to current directory if no files specified
+            other_files = [str(f) for f in find_source_files(".")]
+        from grepmap.visualization import run_visualizer
+        run_visualizer(
+            root=str(root_path),
+            port=args.viz_port,
+            no_open=False,
+            verbose=args.verbose
+        )
+        return
 
     # Join mode: output full file contents instead of symbol map
     # This is a fundamentally different operation - just concat files with separators
