@@ -205,6 +205,7 @@ class GitWeightCalculator:
         # Format: alternating header lines (date|email) and filename lines
         stats: Dict[str, dict] = defaultdict(lambda: {
             'last_modified': None,
+            'first_seen': None,  # Oldest commit date for phase classification
             'commit_count': 0,
             'authors': set()
         })
@@ -247,9 +248,14 @@ class GitWeightCalculator:
                             file_stats['commit_count'] += 1
 
                             if current_date:
+                                # Track most recent modification
                                 if (file_stats['last_modified'] is None or
                                     current_date > file_stats['last_modified']):
                                     file_stats['last_modified'] = current_date
+                                # Track oldest commit (first seen in history)
+                                if (file_stats['first_seen'] is None or
+                                    current_date < file_stats['first_seen']):
+                                    file_stats['first_seen'] = current_date
 
                             if current_author:
                                 file_stats['authors'].add(current_author)
