@@ -66,7 +66,8 @@ class DirectoryRenderer:
         bridge_files: Optional[Set[str]] = None,
         api_symbols: Optional[Set[tuple]] = None,
         git_badges: Optional[Dict[str, List[str]]] = None,
-        file_phases: Optional[Dict[str, str]] = None
+        file_phases: Optional[Dict[str, str]] = None,
+        temporal_mates: Optional[Dict[str, List[tuple]]] = None
     ) -> str:
         """Render ranked tags as hierarchical directory overview.
 
@@ -87,6 +88,9 @@ class DirectoryRenderer:
             file_phases: Dict mapping rel_fname to lifecycle phase string
                         ("crystal", "rotting", "emergent", "evolving").
                         Computed from git history heuristics.
+            temporal_mates: Dict mapping rel_fname to list of (mate_fname, score)
+                           tuples. Shows files that frequently change together.
+                           Only displayed for focus files (chat_files).
 
         Returns:
             Formatted directory overview with hierarchical symbol structure
@@ -96,6 +100,7 @@ class DirectoryRenderer:
         api_symbols = api_symbols or set()
         git_badges = git_badges or {}
         file_phases = file_phases or {}
+        temporal_mates = temporal_mates or {}
         if not tags:
             return ""
 
@@ -196,6 +201,19 @@ class DirectoryRenderer:
                 }
                 text.append(f" [{badge}]", style=badge_colors.get(badge, "dim"))
             console.print(text, no_wrap=True)
+
+            # Show change-mates for focus files (files that frequently change together)
+            if rel_fname in chat_files and rel_fname in temporal_mates:
+                mates = temporal_mates[rel_fname][:3]  # Top 3 change-mates
+                if mates:
+                    mate_line = Text("  ")
+                    mate_line.append("⇄ changes with: ", style="dim magenta")
+                    for i, (mate_fname, score) in enumerate(mates):
+                        if i > 0:
+                            mate_line.append(", ", style="dim")
+                        mate_line.append(mate_fname, style="magenta")
+                        mate_line.append(f"({score:.0%})", style="dim magenta")
+                    console.print(mate_line, no_wrap=True)
 
             # Render classes with their fields and methods
             for class_tag in classes:

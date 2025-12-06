@@ -450,6 +450,10 @@ class GrepMap:
         git_badges = self.git_weight_calculator.compute_badges(rel_fnames_for_badges)
         file_phases = self.git_weight_calculator.classify_phases(rel_fnames_for_badges)
 
+        # Step 1e: Get temporal coupling data for change-mate annotations
+        # Shows files that frequently change together with focus files
+        temporal_mates = self._last_temporal_mates or {}
+
         # Step 2: Create renderer function for optimizer
         def render_at_config(tags: List[RankedTag], detail: DetailLevel) -> str:
             """Render callback for optimizer."""
@@ -457,7 +461,8 @@ class GrepMap:
                 return self.directory_renderer.render(
                     tags, chat_rel_fnames, detail, adaptive=self.adaptive_mode,
                     bridge_files=bridge_files, api_symbols=api_symbols,
-                    git_badges=git_badges, file_phases=file_phases
+                    git_badges=git_badges, file_phases=file_phases,
+                    temporal_mates=temporal_mates
                 )
             else:
                 return self.tree_renderer.render(tags, chat_rel_fnames, detail)
@@ -480,7 +485,8 @@ class GrepMap:
                     minimal_tags, chat_rel_fnames, DetailLevel.LOW,
                     adaptive=self.adaptive_mode,
                     bridge_files=bridge_files, api_symbols=api_symbols,
-                    git_badges=git_badges, file_phases=file_phases
+                    git_badges=git_badges, file_phases=file_phases,
+                    temporal_mates=temporal_mates
                 ), file_report
             else:
                 return self.tree_renderer.render(minimal_tags, chat_rel_fnames, DetailLevel.LOW), file_report
@@ -506,7 +512,8 @@ class GrepMap:
                 selected_tags, chat_rel_fnames, detail,
                 overflow_tags=overflow, adaptive=self.adaptive_mode,
                 bridge_files=bridge_files, api_symbols=api_symbols,
-                git_badges=git_badges, file_phases=file_phases
+                git_badges=git_badges, file_phases=file_phases,
+                temporal_mates=temporal_mates
             )
 
         # Step 5: Prepend confidence header for user awareness
