@@ -109,18 +109,19 @@ def main():
     print(f"Tools: {args.tools}")
     print(f"Question: {args.question}")
     print("=" * 60)
-    print("\n>>> Launching Codex (streaming output)...\n")
+    print("\n>>> Launching Claude (streaming output)...\n")
     print("-" * 60)
 
     try:
-        # Stream output in real-time
+        # Stream output in real-time using claude -p (print mode)
         process = subprocess.Popen(
-            ['codex', 'exec', '-'],
+            ['claude', '-p', '--output-format', 'text'],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1  # Line buffered
+            bufsize=1,  # Line buffered
+            cwd=str(target_repo)  # Run in target repo for tool access
         )
 
         # Send prompt
@@ -180,7 +181,7 @@ def main():
         print(f"\n\n>>> TIMEOUT after {args.timeout}s")
         process.kill()
     except FileNotFoundError:
-        print("Error: 'codex' command not found. Is it installed?", file=sys.stderr)
+        print("Error: 'claude' command not found. Install with: npm install -g @anthropic-ai/claude-code", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\n\n>>> Interrupted by user")

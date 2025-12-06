@@ -94,18 +94,18 @@ Begin your investigation:
     return prompt
 
 
-def run_codex(prompt: str, timeout: int = 300) -> tuple[str, str, float]:
-    """Run Codex with the given prompt, return (stdout, stderr, elapsed_time)."""
+def run_claude(prompt: str, target_repo: str, timeout: int = 300) -> tuple[str, str, float]:
+    """Run Claude with the given prompt, return (stdout, stderr, elapsed_time)."""
     start = time.time()
 
     try:
-        # Use heredoc pattern from CLAUDE.md
         result = subprocess.run(
-            ['codex', 'exec', '-'],
+            ['claude', '-p', '--output-format', 'text'],
             input=prompt,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            cwd=target_repo  # Run in target repo for tool access
         )
         elapsed = time.time() - start
         return result.stdout, result.stderr, elapsed
@@ -113,7 +113,7 @@ def run_codex(prompt: str, timeout: int = 300) -> tuple[str, str, float]:
         elapsed = time.time() - start
         return "", f"TIMEOUT after {timeout}s", elapsed
     except FileNotFoundError:
-        return "", "ERROR: codex command not found", 0.0
+        return "", "ERROR: claude command not found. Install with: npm install -g @anthropic-ai/claude-code", 0.0
 
 
 def estimate_tokens(text: str) -> int:
@@ -159,7 +159,7 @@ def run_challenge(
 ) -> ChallengeResult:
     """Run a single challenge and return results."""
     prompt = build_prompt(challenge, tool_config, target_repo)
-    stdout, stderr, elapsed = run_codex(prompt, timeout)
+    stdout, stderr, elapsed = run_claude(prompt, target_repo, timeout)
 
     # Rough success detection (would need manual validation in real use)
     success = len(stdout) > 100 and 'error' not in stderr.lower()
