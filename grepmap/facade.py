@@ -25,7 +25,8 @@ from grepmap.cache import CacheManager
 from grepmap.extraction import get_tags_raw, extract_signature_info, extract_class_fields
 from grepmap.ranking import (
     PageRanker, SymbolRanker, BoostCalculator, GitWeightCalculator,
-    Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, IntentClassifier
+    Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, IntentClassifier,
+    CallerResolver, BridgeDetector, SurfaceDetector, Intent
 )
 from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer
 from utils import count_tokens, read_text
@@ -199,6 +200,24 @@ class GrepMap:
 
         # Intent classifier: infer task type for recipe selection
         self.intent_classifier = IntentClassifier(
+            verbose=self.verbose
+        )
+
+        # Caller resolver: find callers of focus symbols for DEBUG intent
+        # When debugging, boost files that CALL the broken function
+        self.caller_resolver = CallerResolver(
+            verbose=self.verbose
+        )
+
+        # Bridge detector: find load-bearing files via betweenness centrality
+        # These are files that connect different parts of the architecture
+        self.bridge_detector = BridgeDetector(
+            verbose=self.verbose
+        )
+
+        # Surface detector: classify symbols as API vs internal
+        # Prioritize public interfaces over implementation details
+        self.surface_detector = SurfaceDetector(
             verbose=self.verbose
         )
 
@@ -549,6 +568,39 @@ class GrepMap:
                 for f, w in git_weights.items()
             }
 
+        # Step 4d: Reverse edge tracing for DEBUG intent
+        # When debugging, boost files that CALL the broken focus symbols
+        # Uses recipe.reverse_edge_bias to control boost strength
+        caller_boost_files: Set[str] = set()
+        if intent == Intent.DEBUG and focus_idents and hasattr(self.symbol_ranker, '_last_graph'):
+            symbol_graph = self.symbol_ranker._last_graph
+            if symbol_graph:
+                # Build focus_symbols set: (rel_fname, symbol_name) tuples
+                focus_symbols = set()
+                for ident in focus_idents:
+                    # Find all files containing this identifier
+                    for fname, tags in tags_by_file.items():
+                        rel_fname = self.get_rel_fname(fname)
+                        for tag in tags:
+                            if tag.name == ident and tag.kind == "def":
+                                focus_symbols.add((rel_fname, tag.name))
+
+                caller_files = self.caller_resolver.find_callers(
+                    focus_symbols, symbol_graph, self.output_handlers['info']
+                )
+                caller_boost_files = caller_files
+
+                if self.verbose and caller_files:
+                    self.output_handlers['info'](
+                        f"DEBUG mode: found {len(caller_files)} caller files for {len(focus_symbols)} focus symbols"
+                    )
+        self._last_caller_files = caller_boost_files  # Store for diagnostics
+
+        # Add caller files to mentioned_fnames for boosting
+        # This surfaces the calling context when debugging
+        if caller_boost_files:
+            mentioned_fnames = mentioned_fnames | caller_boost_files
+
         # Step 5: Apply boosts and create ranked tags
         # Pass symbol_ranks for per-symbol ranking, git_weights for temporal boost,
         # and temporal_mates for co-change boost
@@ -732,15 +784,80 @@ class GrepMap:
         recipe = self.intent_classifier.get_recipe(intent)
         intent_line = f"INTENT:{intent.value} recipe:rec{recipe.recency_weight:.1f}/churn{recipe.churn_weight:.1f}/rev{recipe.reverse_edge_bias:.1f}"
 
+        # Bridge detection: find load-bearing files via betweenness centrality
+        bridge_line = ""
+        if hasattr(self.symbol_ranker, '_last_graph') and self.symbol_ranker._last_graph:
+            # Use file-level graph derived from symbol graph
+            file_graph = self._build_file_graph_from_symbol_graph(self.symbol_ranker._last_graph)
+            bridges = self.bridge_detector.detect_bridges(file_graph, top_n=5)
+            if bridges:
+                bridge_names = [f"{b.rel_fname}({b.betweenness:.2f})" for b in bridges[:5]]
+                bridge_line = f"BRIDGES: {', '.join(bridge_names)}"
+
+        # Surface detection: classify API vs internal symbols
+        surface_line = ""
+        if hasattr(self.symbol_ranker, '_last_graph') and self.symbol_ranker._last_graph:
+            # Build tags_by_file for surface detector
+            # (we already have this from get_ranked_tags, but it's not passed here)
+            classifications = self.surface_detector.classify_symbols(
+                self.symbol_ranker._last_graph, {}
+            )
+            api_count = sum(1 for info in classifications.values()
+                          if info.surface_type.value == 'api')
+            internal_count = sum(1 for info in classifications.values()
+                                if info.surface_type.value == 'internal')
+            surface_line = f"SURFACE: api={api_count} internal={internal_count}"
+
+        # Caller resolution stats
+        caller_line = ""
+        caller_files = getattr(self, '_last_caller_files', set())
+        if caller_files:
+            caller_line = f"CALLERS: {len(caller_files)} files boosted"
+
         self.output_handlers['info'](f"DIAG: {diag_line}")
         self.output_handlers['info'](f"DIAG: {top_line}")
         self.output_handlers['info'](f"DIAG: {conf_line}")
         self.output_handlers['info'](f"DIAG: {intent_line}")
+        if bridge_line:
+            self.output_handlers['info'](f"DIAG: {bridge_line}")
+        if surface_line:
+            self.output_handlers['info'](f"DIAG: {surface_line}")
+        if caller_line:
+            self.output_handlers['info'](f"DIAG: {caller_line}")
+
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
+    def _build_file_graph_from_symbol_graph(self, symbol_graph) -> 'nx.MultiDiGraph':
+        """Build file-level graph from symbol graph for bridge detection.
+
+        Collapses symbol nodes (rel_fname, symbol_name) to file nodes,
+        preserving edge direction. Used for betweenness centrality.
+        """
+        import networkx as nx
+        file_graph = nx.MultiDiGraph()
+
+        for u, v in symbol_graph.edges():
+            if isinstance(u, tuple) and len(u) == 2:
+                u_file = u[0]
+            else:
+                continue
+            if isinstance(v, tuple) and len(v) == 2:
+                v_file = v[0]
+            else:
+                continue
+
+            # Skip self-loops (intra-file references)
+            if u_file != v_file:
+                file_graph.add_edge(u_file, v_file)
+
+        return file_graph
 
     # =========================================================================
     # Legacy Compatibility Methods
     # =========================================================================
-    
+
     def load_tags_cache(self):
         """Legacy method - delegates to cache manager."""
         pass  # Already initialized in __init__
