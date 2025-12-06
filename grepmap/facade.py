@@ -399,7 +399,8 @@ class GrepMap:
         # Diagnostic output: ultra-dense machine-readable stats
         if self.diagnose:
             self._output_diagnostics(
-                ranked_tags, selected_tags, detail, tokens, max_map_tokens
+                ranked_tags, selected_tags, detail, tokens, max_map_tokens,
+                focus_targets
             )
 
         # Step 4: Re-render with overflow tags for "also in scope" section
@@ -661,13 +662,15 @@ class GrepMap:
         selected_tags: List[RankedTag],
         detail: DetailLevel,
         tokens_used: int,
-        token_budget: int
+        token_budget: int,
+        focus_targets: Optional[List[str]] = None
     ):
         """Output ultra-dense diagnostic data for machine parsing.
 
         Format: pipe-separated sections, each maximally compressed.
         Designed for LLM consumption, not human readability.
         """
+        focus_targets = focus_targets or []
         from grepmap.diagnostics import collect_diagnostic_data, format_diagnostic
 
         # Get graph data from symbol ranker
@@ -709,9 +712,15 @@ class GrepMap:
         confidence = self.confidence_engine.analyze(ranks, graph_data)
         conf_line = f"CONF:{confidence.level} pat:{','.join(confidence.patterns) or 'none'} ent:{confidence.entropy:.2f} stab:{confidence.stability:.2f}"
 
+        # Intent classification
+        intent = self.intent_classifier.classify(focus_targets)
+        recipe = self.intent_classifier.get_recipe(intent)
+        intent_line = f"INTENT:{intent.value} recipe:rec{recipe.recency_weight:.1f}/churn{recipe.churn_weight:.1f}/rev{recipe.reverse_edge_bias:.1f}"
+
         self.output_handlers['info'](f"DIAG: {diag_line}")
         self.output_handlers['info'](f"DIAG: {top_line}")
         self.output_handlers['info'](f"DIAG: {conf_line}")
+        self.output_handlers['info'](f"DIAG: {intent_line}")
 
     # =========================================================================
     # Legacy Compatibility Methods
