@@ -22,8 +22,13 @@ from pathlib import Path
 
 TOOL_SETUPS = {
     'grepmap': """Available tools:
-- grepmap <path> [--chat-files file1 file2] [--map-tokens N] [--tree]
-  Shows ranked map of important code structures. Use --chat-files to focus on specific files.
+- grepmap <path> [--focus file1 file2] [--map-tokens N] [--diag]
+  Shows ranked map of code structures with annotations:
+  [bridge] = load-bearing connector files
+  [api] = public interface symbols
+  [recent] [high-churn] = git activity badges
+  [crystal/rotting/emergent/evolving] = lifecycle phase
+  Use --focus to prioritize specific files.
 - cat <file> - Read a file
 - head -n N <file> - Read first N lines""",
 
@@ -37,14 +42,15 @@ TOOL_SETUPS = {
 - ls <path> - List directory""",
 
     'both': """Available tools:
-- grepmap <path> [--chat-files file1 file2] [--map-tokens N] [--tree]
-  Shows ranked map of important code structures. Start here for orientation.
+- grepmap <path> [--focus file1 file2] [--map-tokens N] [--diag]
+  Shows ranked map with annotations: [bridge] [api] [recent] [crystal/rotting/emergent]
+  Start here for orientation. Use --focus to prioritize specific files.
 - rg <pattern> [path] - Ripgrep for specific strings/patterns
 - cat/head/tail - Read files
 - find - Find files by name
 - ls - List directories
 
-Strategy hint: Use grepmap first to find important files, then rg/cat for details."""
+Strategy hint: Use grepmap first to orient, then rg/cat for details."""
 }
 
 

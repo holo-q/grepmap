@@ -116,7 +116,9 @@ config:
   # Tool configurations to test
   tool_configs:
     grepmap:
-      setup: "Available tool: grepmap <path> [--chat-files ...] [--map-tokens N]"
+      setup: |
+        Available tool: grepmap <path> [--focus file1 file2] [--map-tokens N] [--diag]
+        Shows ranked map with annotations: [bridge] [api] [recent] [crystal/rotting/emergent]
       allowed_commands: ["grepmap", "cat", "head"]
 
     grep_only:
@@ -124,5 +126,8 @@ config:
       allowed_commands: ["rg", "find", "cat", "head", "tail", "ls"]
 
     both:
-      setup: "Available tools: grepmap, rg, find, cat, head, tail"
+      setup: |
+        Available tools:
+        - grepmap <path> [--focus ...] [--map-tokens N] - ranked map with [bridge] [api] [recent] annotations
+        - rg (ripgrep), find, cat, head, tail
       allowed_commands: ["grepmap", "rg", "find", "cat", "head", "tail", "ls"]
