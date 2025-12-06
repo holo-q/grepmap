@@ -299,7 +299,7 @@ def main():
             challenges_passed=passed,
             total_tokens=total_tokens,
             total_time_seconds=total_time,
-            results=[asdict(r) for r in results]
+            results=results
         )
 
         with open(args.output, 'w') as f:

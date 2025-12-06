@@ -16,7 +16,7 @@ Output format (single line per section, pipe-separated):
 """
 
 from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from grepmap.core.types import RankedTag, DetailLevel
 
@@ -27,17 +27,17 @@ class DiagnosticData:
     # Graph stats
     num_symbols: int = 0
     num_edges: int = 0
-    hub_symbols: List[Tuple[str, int]] = None  # (name, in_degree)
+    hub_symbols: List[Tuple[str, int]] = field(default_factory=list)  # (name, in_degree)
     orphan_count: int = 0
 
     # Rank distribution
-    ranks: List[float] = None
+    ranks: List[float] = field(default_factory=list)
 
     # Boost breakdown
-    base_ranks: Dict[str, float] = None  # Before boosts
+    base_ranks: Dict[str, float] = field(default_factory=dict)  # Before boosts
     symbol_multiplier: float = 1.0
     git_max_boost: float = 1.0
-    git_boosted_files: List[Tuple[str, float]] = None
+    git_boosted_files: List[Tuple[str, float]] = field(default_factory=list)
     focus_boost: float = 1.0
 
     # HP values (snapshot)
@@ -137,7 +137,7 @@ def format_diagnostic(data: DiagnosticData) -> str:
     return " | ".join(lines)
 
 
-def format_top_symbols(ranked_tags: List[RankedTag], symbol_refs: Dict[str, int], n: int = 10) -> str:
+def format_top_symbols(ranked_tags: List[RankedTag], symbol_refs: Dict[Tuple[str, str], int], n: int = 10) -> str:
     """Format top N symbols with ranks and ref counts."""
     seen = set()
     parts = []

@@ -118,6 +118,8 @@ def main():
         )
 
         # Send prompt
+        assert process.stdin is not None
+        assert process.stdout is not None
         process.stdin.write(prompt)
         process.stdin.close()
 

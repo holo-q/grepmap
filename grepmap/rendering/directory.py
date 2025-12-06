@@ -62,7 +62,9 @@ class DirectoryRenderer:
         chat_files: Set[str],
         detail: DetailLevel,
         overflow_tags: Optional[List[RankedTag]] = None,
-        adaptive: bool = False
+        adaptive: bool = False,
+        bridge_files: Optional[Set[str]] = None,
+        api_symbols: Optional[Set[tuple]] = None
     ) -> str:
         """Render ranked tags as hierarchical directory overview.
 
@@ -74,10 +76,17 @@ class DirectoryRenderer:
             adaptive: If True, use per-file detail levels based on rank percentile.
                       Focus files (chat_files) get HIGH, top 20% by rank get HIGH,
                       middle 40% get MEDIUM, bottom 40% get LOW.
+            bridge_files: Set of rel_fnames that are load-bearing bridges
+                         (high betweenness centrality). Annotated with [bridge]
+            api_symbols: Set of (rel_fname, symbol_name) tuples classified as
+                        public API surface. Annotated with [api]
 
         Returns:
             Formatted directory overview with hierarchical symbol structure
         """
+        # Default to empty sets if not provided
+        bridge_files = bridge_files or set()
+        api_symbols = api_symbols or set()
         if not tags:
             return ""
 
@@ -155,14 +164,17 @@ class DirectoryRenderer:
                 elif tag.node_type in ('constant', 'variable'):
                     constants.append(tag)
 
-            # File header
+            # File header with optional bridge annotation
             text = Text()
             text.append(f"{rel_fname}:", style="bold blue")
+            if rel_fname in bridge_files:
+                text.append(" [bridge]", style="dim yellow")
             console.print(text, no_wrap=True)
 
             # Render classes with their fields and methods
             for class_tag in classes:
-                class_display = self._render_symbol(class_tag, file_detail, file_seen, name_color="bold cyan")
+                is_class_api = (rel_fname, class_tag.name) in api_symbols
+                class_display = self._render_symbol(class_tag, file_detail, file_seen, name_color="bold cyan", is_api=is_class_api)
                 line = Text()
                 line.append("  class ", style="magenta")
                 line.append_text(class_display)
@@ -201,7 +213,8 @@ class DirectoryRenderer:
                     self._render_symbol_list(
                         console, class_properties, file_detail, file_seen,
                         indent="    ", label="props", term_width=term_width,
-                        label_color="dim magenta", name_color="bright_cyan"
+                        label_color="dim magenta", name_color="bright_cyan",
+                        rel_fname=rel_fname, api_symbols=api_symbols
                     )
 
                 # Render methods indented under the class
@@ -209,7 +222,8 @@ class DirectoryRenderer:
                     self._render_symbol_list(
                         console, class_methods, file_detail, file_seen,
                         indent="    ", label="def", term_width=term_width,
-                        label_color="dim magenta", name_color="yellow"
+                        label_color="dim magenta", name_color="yellow",
+                        rel_fname=rel_fname, api_symbols=api_symbols
                     )
 
             # Render top-level functions
@@ -217,7 +231,8 @@ class DirectoryRenderer:
                 self._render_symbol_list(
                     console, top_level_funcs, file_detail, file_seen,
                     indent="  ", label="def", term_width=term_width,
-                    label_color="magenta", name_color="green"
+                    label_color="magenta", name_color="green",
+                    rel_fname=rel_fname, api_symbols=api_symbols
                 )
 
             # Render constants
@@ -225,7 +240,8 @@ class DirectoryRenderer:
                 self._render_symbol_list(
                     console, constants, file_detail, file_seen,
                     indent="  ", label="const", term_width=term_width,
-                    label_color="magenta", name_color="bright_green"
+                    label_color="magenta", name_color="bright_green",
+                    rel_fname=rel_fname, api_symbols=api_symbols
                 )
 
         # Low-resolution summary: show overflow tags (files beyond the detailed view)
@@ -311,7 +327,8 @@ class DirectoryRenderer:
         tag: Tag,
         detail_level: DetailLevel,
         seen_patterns: Optional[set] = None,
-        name_color: str = "yellow"
+        name_color: str = "yellow",
+        is_api: bool = False
     ) -> Text:
         """Render a symbol with syntax highlighting.
 
@@ -320,6 +337,7 @@ class DirectoryRenderer:
             detail_level: LOW (name only), MEDIUM (with params), HIGH (full sig)
             seen_patterns: For HIGH detail, tracks seen param:type patterns for dedup
             name_color: Color for the function/method name
+            is_api: If True, append [api] annotation for public interface symbols
 
         Returns:
             Rich Text object with syntax-highlighted symbol
@@ -329,6 +347,8 @@ class DirectoryRenderer:
 
         if detail_level == DetailLevel.LOW:
             result.append(name, style=name_color)
+            if is_api:
+                result.append(" [api]", style="dim green")
             return result
 
         # MEDIUM or HIGH: include signature for functions
@@ -364,6 +384,8 @@ class DirectoryRenderer:
                 result.append(" -> ", style=get_token_color("->"))
                 result.append(tag.signature.return_type, style=get_token_color("type"))
 
+            if is_api:
+                result.append(" [api]", style="dim green")
             return result
 
         # MEDIUM or HIGH: include fields for classes
@@ -385,9 +407,13 @@ class DirectoryRenderer:
                 result.append(f", +{len(tag.fields) - 5}", style="dim white")
 
             result.append(")", style=get_token_color(")"))
+            if is_api:
+                result.append(" [api]", style="dim green")
             return result
 
         result.append(name, style=name_color)
+        if is_api:
+            result.append(" [api]", style="dim green")
         return result
 
     def _render_field(self, field, detail_level: DetailLevel) -> Text:
@@ -470,13 +496,19 @@ class DirectoryRenderer:
         label: str,
         term_width: int,
         label_color: str,
-        name_color: str
+        name_color: str,
+        rel_fname: str = "",
+        api_symbols: Optional[Set[tuple]] = None
     ) -> None:
         """Render a labeled list of symbols with syntax highlighting."""
         if not tags_list:
             return
+        api_symbols = api_symbols or set()
         items = [
-            self._render_symbol(tag, detail_level, seen_patterns, name_color)
+            self._render_symbol(
+                tag, detail_level, seen_patterns, name_color,
+                is_api=(rel_fname, tag.name) in api_symbols
+            )
             for tag in tags_list
         ]
         self._render_labeled_list(console, items, indent, label, term_width, label_color)

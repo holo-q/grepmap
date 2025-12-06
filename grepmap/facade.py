@@ -422,13 +422,34 @@ class GrepMap:
             detail_levels = [DetailLevel.LOW, DetailLevel.MEDIUM, DetailLevel.HIGH]
         else:
             detail_levels = [DetailLevel.LOW]
-        
+
+        # Step 1c: Compute bridge files and API surface for annotations
+        # These are computed from the symbol graph and shown in directory view
+        bridge_files: Set[str] = set()
+        api_symbols: Set[tuple] = set()
+
+        if self.directory_mode and self.symbol_rank and hasattr(self.symbol_ranker, '_last_graph'):
+            symbol_graph = self.symbol_ranker._last_graph
+            if symbol_graph:
+                # Compute bridges (top 5 load-bearing files)
+                file_graph = self._build_file_graph_from_symbol_graph(symbol_graph)
+                bridges = self.bridge_detector.detect_bridges(file_graph, top_n=5)
+                bridge_files = {b.rel_fname for b in bridges if b.betweenness > 0}
+
+                # Compute API surface symbols
+                classifications = self.surface_detector.classify_symbols(symbol_graph, {})
+                api_symbols = {
+                    info.symbol_id for info in classifications.values()
+                    if info.surface_type.value == 'api'
+                }
+
         # Step 2: Create renderer function for optimizer
         def render_at_config(tags: List[RankedTag], detail: DetailLevel) -> str:
             """Render callback for optimizer."""
             if self.directory_mode:
                 return self.directory_renderer.render(
-                    tags, chat_rel_fnames, detail, adaptive=self.adaptive_mode
+                    tags, chat_rel_fnames, detail, adaptive=self.adaptive_mode,
+                    bridge_files=bridge_files, api_symbols=api_symbols
                 )
             else:
                 return self.tree_renderer.render(tags, chat_rel_fnames, detail)
@@ -449,7 +470,8 @@ class GrepMap:
             if self.directory_mode:
                 return self.directory_renderer.render(
                     minimal_tags, chat_rel_fnames, DetailLevel.LOW,
-                    adaptive=self.adaptive_mode
+                    adaptive=self.adaptive_mode,
+                    bridge_files=bridge_files, api_symbols=api_symbols
                 ), file_report
             else:
                 return self.tree_renderer.render(minimal_tags, chat_rel_fnames, DetailLevel.LOW), file_report
@@ -473,7 +495,8 @@ class GrepMap:
             overflow = ranked_tags[num_selected:num_selected + overflow_count]
             output = self.directory_renderer.render(
                 selected_tags, chat_rel_fnames, detail,
-                overflow_tags=overflow, adaptive=self.adaptive_mode
+                overflow_tags=overflow, adaptive=self.adaptive_mode,
+                bridge_files=bridge_files, api_symbols=api_symbols
             )
         
         return output, file_report
@@ -518,7 +541,13 @@ class GrepMap:
         included: List[str] = []
         excluded: Dict[str, str] = {}
 
-        all_fnames = list(set(other_fnames))
+        # Include focus_targets that look like file paths (not search queries)
+        # This ensures chat files get processed and appear in the map
+        focus_file_paths = [
+            normalize_path(ft) for ft in focus_targets
+            if os.path.exists(ft) or ft.endswith(('.py', '.js', '.ts', '.go', '.rs', '.java', '.c', '.cpp', '.h'))
+        ]
+        all_fnames = list(set(other_fnames + focus_file_paths))
 
         if self.verbose:
             self.output_handlers['info'](f"Processing {len(all_fnames)} files for tag extraction...")

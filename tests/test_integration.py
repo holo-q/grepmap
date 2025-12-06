@@ -191,6 +191,7 @@ def other_function():
         )
 
         self.assertIsNotNone(result)
+        assert result is not None  # Type narrowing for mypy
         # Both files should be included (not testing exact ordering - that's layout)
         self.assertIn("important.py", result, "Should include chat file")
         self.assertIn("critical_function", result, "Should include chat file symbols")
@@ -377,6 +378,7 @@ class MyClass:
             other_files=[str(test_file)]
         )
 
+        assert result1 is not None
         self.assertIn("old_function", result1)
 
         # Modify file - ensure mtime changes by using touch
@@ -393,5 +395,6 @@ class MyClass:
             force_refresh=True  # Force cache refresh
         )
 
+        assert result2 is not None
         self.assertNotIn("old_function", result2, "Should not see old function after refresh")
         self.assertIn("new_function", result2, "Should see new function after refresh")

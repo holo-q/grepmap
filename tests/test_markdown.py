@@ -197,13 +197,13 @@ class TestSectionSnippets:
     def test_extracts_snippet_from_prose(self):
         code = "# Title\n\nThis is the section content that should appear in the snippet."
         tags = parse_markdown_tags(code, "/path/file.md", "file.md")
-        assert tags[0].signature is not None
+        assert tags[0].signature is not None and tags[0].signature.raw is not None
         assert "section content" in tags[0].signature.raw
 
     def test_snippet_truncates_long_content(self):
         code = "# Title\n\n" + "word " * 100  # Very long content
         tags = parse_markdown_tags(code, "/path/file.md", "file.md", snippet_length=80)
-        assert tags[0].signature is not None
+        assert tags[0].signature is not None and tags[0].signature.raw is not None
         assert "[...]" in tags[0].signature.raw
         assert len(tags[0].signature.raw) < 120  # Should be reasonably bounded
 
@@ -211,6 +211,7 @@ class TestSectionSnippets:
         """Long snippets should show head [...] tail format."""
         code = "# Title\n\nStart of content. " + "middle " * 50 + "End of content."
         tags = parse_markdown_tags(code, "/path/file.md", "file.md", snippet_length=80)
+        assert tags[0].signature is not None and tags[0].signature.raw is not None
         raw = tags[0].signature.raw
         assert "Start" in raw
         assert "[...]" in raw
@@ -236,6 +237,7 @@ def foo():
         """Snippets should strip bold, italic, links."""
         code = "# Title\n\n**Bold** and *italic* with [link](url) here."
         tags = parse_markdown_tags(code, "/path/file.md", "file.md")
+        assert tags[0].signature is not None and tags[0].signature.raw is not None
         raw = tags[0].signature.raw
         # Should contain text but not markdown syntax
         assert "Bold" in raw
