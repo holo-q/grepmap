@@ -25,8 +25,9 @@ from grepmap.cache import CacheManager
 from grepmap.extraction import get_tags_raw, extract_signature_info, extract_class_fields
 from grepmap.ranking import (
     PageRanker, SymbolRanker, BoostCalculator, GitWeightCalculator,
-    Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, IntentClassifier,
-    CallerResolver, BridgeDetector, SurfaceDetector, Intent, SymbolStoryExtractor
+    Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, ConfidenceResult,
+    IntentClassifier, CallerResolver, BridgeDetector, SurfaceDetector, Intent,
+    SymbolStoryExtractor
 )
 from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer, ClusterRenderer, should_use_clusters
 from utils import count_tokens, read_text
@@ -498,7 +499,11 @@ class GrepMap:
                 overflow_tags=overflow, adaptive=self.adaptive_mode,
                 bridge_files=bridge_files, api_symbols=api_symbols
             )
-        
+
+        # Step 5: Prepend confidence header for user awareness
+        # Shows ranking quality so users understand map reliability
+        output = self._format_confidence_header(confidence, len(selected_tags), tokens) + output
+
         return output, file_report
     
     def get_ranked_tags(
@@ -943,6 +948,48 @@ class GrepMap:
                 file_graph.add_edge(u_file, v_file)
 
         return file_graph
+
+    def _format_confidence_header(
+        self,
+        confidence: ConfidenceResult,
+        tag_count: int,
+        token_count: int
+    ) -> str:
+        """Format a compact header showing ranking confidence for user awareness.
+
+        The header communicates map reliability at a glance:
+        - High confidence: ranking is reliable, trust the ordering
+        - Medium confidence: ranking is reasonable, but not definitive
+        - Low confidence: ranking is uncertain, consider exploring clusters
+
+        Format: "# Ranking: {level} ({pattern_hint}) | {tag_count} symbols | {token_count} tokens\n"
+
+        Args:
+            confidence: ConfidenceResult from ConfidenceEngine
+            tag_count: Number of symbols in the rendered map
+            token_count: Token budget used
+
+        Returns:
+            Header string with trailing newline, or empty if confidence is trivial
+        """
+        # Skip header for very small maps or missing confidence data
+        if tag_count < 5:
+            return ""
+
+        # Build pattern hint from detected patterns
+        if confidence.patterns:
+            # Show first 2 patterns at most for brevity
+            pattern_hint = ", ".join(confidence.patterns[:2])
+        else:
+            pattern_hint = "clear hierarchy" if confidence.level == "high" else "normal"
+
+        # Format token count compactly
+        if token_count >= 1000:
+            tokens_str = f"{token_count / 1000:.1f}k tokens"
+        else:
+            tokens_str = f"{token_count} tokens"
+
+        return f"# Ranking: {confidence.level} ({pattern_hint}) | {tag_count} symbols | {tokens_str}\n"
 
     # =========================================================================
     # Legacy Compatibility Methods
