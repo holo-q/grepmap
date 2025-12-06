@@ -17,6 +17,7 @@ from grepmap.rendering.base import Renderer
 from grepmap.rendering.tree import TreeRenderer
 from grepmap.rendering.directory import DirectoryRenderer
 from grepmap.rendering.stats import StatsRenderer
+from grepmap.rendering.clusters import ClusterRenderer, should_use_clusters
 from grepmap.rendering.syntax import (
     get_token_color,
     get_symbol_icon,
@@ -28,6 +29,8 @@ __all__ = [
     'TreeRenderer',
     'DirectoryRenderer',
     'StatsRenderer',
+    'ClusterRenderer',
+    'should_use_clusters',
     'get_token_color',
     'get_symbol_icon',
     'get_symbol_color',

@@ -28,7 +28,7 @@ from grepmap.ranking import (
     Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, IntentClassifier,
     CallerResolver, BridgeDetector, SurfaceDetector, Intent
 )
-from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer
+from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer, ClusterRenderer, should_use_clusters
 from utils import count_tokens, read_text
 
 
@@ -221,6 +221,12 @@ class GrepMap:
             verbose=self.verbose
         )
 
+        # Cluster renderer: used when confidence is low
+        # Groups symbols by directory instead of flat ranking
+        self.cluster_renderer = ClusterRenderer(
+            verbose=self.verbose
+        )
+
     # =========================================================================
     # Public API - Main entry points
     # =========================================================================
@@ -357,6 +363,30 @@ class GrepMap:
 
         chat_rel_fnames = focus_rel_fnames  # Alias for compatibility
         n = len(ranked_tags)
+
+        # Step 1b: Compute ranking confidence for adaptive rendering
+        # When confidence is low, cluster view may be more useful than flat ranking
+        ranks = [rt.rank for rt in ranked_tags]
+        graph_data = {}
+        if self.symbol_rank and hasattr(self.symbol_ranker, 'get_diagnostic_data'):
+            graph_data = self.symbol_ranker.get_diagnostic_data()
+        confidence = self.confidence_engine.analyze(ranks, graph_data)
+        self._last_confidence = confidence  # Store for diagnostics
+
+        # Confidence-driven rendering: use clusters when ranking is uncertain
+        # This surfaces structure when we can't reliably rank individual symbols
+        if self.adaptive_mode and should_use_clusters(confidence.level, confidence.patterns):
+            if self.verbose:
+                self.output_handlers['info'](
+                    f"Low confidence ({confidence.level}), using cluster view"
+                )
+            output = self.cluster_renderer.render(
+                ranked_tags, chat_rel_fnames, DetailLevel.MEDIUM
+            )
+            tokens = self.token_count(output)
+            if tokens <= max_map_tokens:
+                return output, file_report
+            # Fall through to normal rendering if clusters exceed budget
 
         # Stats mode: compact diagnostics view (LOC, def counts)
         # Bypasses optimizer since stats are very compact
@@ -829,7 +859,7 @@ class GrepMap:
     # Helper Methods
     # =========================================================================
 
-    def _build_file_graph_from_symbol_graph(self, symbol_graph) -> 'nx.MultiDiGraph':
+    def _build_file_graph_from_symbol_graph(self, symbol_graph):
         """Build file-level graph from symbol graph for bridge detection.
 
         Collapses symbol nodes (rel_fname, symbol_name) to file nodes,

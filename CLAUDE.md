@@ -1,3 +1,14 @@
+=== Tools ===
+
+* python: uv
+* env: uv
+* testing: testslide
+
+=== Work Standard ===
+
+* Use `ty check` and `uvx ruff check` after big changes to verify
+* Keep your eyes peeled and proactively whisper to the user when you notice a refactor that can simplify the code or architectural or abstraction extraction, suggesting possible encapsulations that would be elegant. Sometimes we hack on a project and we don't expect it to grow and all these features to come in, and we end up with a 1500 line monolith!
+
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║  CRITICAL: USE GREPMAP FIRST - THIS IS NOT OPTIONAL                          ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -52,7 +63,3 @@ cover 90% of situations. Auto-detection > manual specification.
 **The question:** Does the beast steer itself cleanly, or require human twiddling?
 Observe whether focus shifts gini from 0.08→0.9 without explicit flags.
 
-=== Work Standard ===
-
-* Use `ty check` and `uvx ruff check` after big changes to verify
-* Keep your eyes peeled and proactively whisper to the user when you notice a refactor that can simplify the code or architectural or abstraction extraction, suggesting possible encapsulations that would be elegant. Sometimes we hack on a project and we don't expect it to grow and all these features to come in, and we end up with a 1500 line monolith!

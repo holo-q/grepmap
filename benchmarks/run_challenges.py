@@ -18,7 +18,6 @@ Examples:
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -26,7 +25,7 @@ import yaml
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 
 
 @dataclass
@@ -247,7 +246,7 @@ def main():
     tool_config_name = args.tools.replace('-', '_')
     tool_config = tool_configs.get(tool_config_name, tool_configs['both'])
 
-    print(f"=== Agent Navigation Benchmark ===")
+    print("=== Agent Navigation Benchmark ===")
     print(f"Target: {target_repo}")
     print(f"Tools: {args.tools}")
     print(f"Challenges: {len(challenges)}")

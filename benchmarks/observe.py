@@ -166,7 +166,7 @@ def main():
         if cat_invocations > 3:
             print(f"⚠ Many file reads ({cat_invocations}) - might need better preview/context")
         if grepmap_invocations == 0 and '--tools grepmap' in ' '.join(sys.argv):
-            print(f"⚠ grepmap not used despite being available - check if it's working in target env")
+            print("⚠ grepmap not used despite being available - check if it's working in target env")
 
     except subprocess.TimeoutExpired:
         print(f"\n\n>>> TIMEOUT after {args.timeout}s")
