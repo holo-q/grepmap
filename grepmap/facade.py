@@ -611,7 +611,14 @@ class GrepMap:
                 chat_fnames=list(focus_files)
             )
 
-        # Step 4: Compute git weights if enabled (recency/churn/authorship)
+        # Step 4: Classify intent and get recipe FIRST
+        # Intent determines how we weight recency vs churn
+        intent = self.intent_classifier.classify(focus_targets)
+        recipe = self.intent_classifier.get_recipe(intent)
+        self._last_intent = intent  # Store for diagnostics
+
+        # Step 4b: Compute git weights with recipe-scaled factors
+        # Recipe controls boost strengths: DEBUG favors recency, REFACTOR favors churn
         git_weights = None
         if self.git_weight:
             rel_fnames = [self.get_rel_fname(f) for f in included]
@@ -619,11 +626,13 @@ class GrepMap:
                 rel_fnames,
                 use_recency=True,
                 use_churn=True,
-                use_authorship=False  # Optional, can be enabled later
+                use_authorship=False,
+                recency_scale=recipe.recency_weight,
+                churn_scale=recipe.churn_weight
             )
         self._last_git_weights = git_weights  # Store for diagnostics
 
-        # Step 4b: Compute temporal coupling (files that change together)
+        # Step 4c: Compute temporal coupling (files that change together)
         # Only compute if we have focus files to find change-mates for
         temporal_mates = None
         if focus_files:
@@ -631,25 +640,11 @@ class GrepMap:
             temporal_mates = self.temporal_coupling.compute_coupling(rel_fnames)
         self._last_temporal_mates = temporal_mates  # Store for diagnostics
 
-        # Step 4c: Classify intent and modulate weights by recipe
-        # Intent affects how strongly we weight recency vs churn
-        intent = self.intent_classifier.classify(focus_targets)
-        recipe = self.intent_classifier.get_recipe(intent)
-        self._last_intent = intent  # Store for diagnostics
-
-        # Apply recipe to git_weights: scale recency effect
-        # Higher recency_weight = favor recently changed files more
-        if git_weights and recipe.recency_weight != 1.0:
-            # Scale the boost portion: weight = 1 + (boost - 1) * recipe_factor
-            git_weights = {
-                f: 1.0 + (w - 1.0) * recipe.recency_weight
-                for f, w in git_weights.items()
-            }
-
         # Step 4d: Reverse edge tracing for DEBUG intent
         # When debugging, boost files that CALL the broken focus symbols
         # Uses recipe.reverse_edge_bias to control boost strength
         caller_boost_files: Set[str] = set()
+        caller_weights: Optional[Dict[str, float]] = None
         if intent == Intent.DEBUG and focus_idents and hasattr(self.symbol_ranker, '_last_graph'):
             symbol_graph = self.symbol_ranker._last_graph
             if symbol_graph:
@@ -668,20 +663,26 @@ class GrepMap:
                 )
                 caller_boost_files = caller_files
 
+                # Create caller weights using reverse_edge_bias from recipe
+                # Higher bias = stronger boost for caller files (surfaces call sites)
+                if caller_files and recipe.reverse_edge_bias != 1.0:
+                    caller_weights = {f: recipe.reverse_edge_bias for f in caller_files}
+
                 if self.verbose and caller_files:
                     self.output_handlers['info'](
-                        f"DEBUG mode: found {len(caller_files)} caller files for {len(focus_symbols)} focus symbols"
+                        f"DEBUG mode: found {len(caller_files)} caller files "
+                        f"(bias: {recipe.reverse_edge_bias}x) for {len(focus_symbols)} focus symbols"
                     )
         self._last_caller_files = caller_boost_files  # Store for diagnostics
 
-        # Add caller files to mentioned_fnames for boosting
-        # This surfaces the calling context when debugging
+        # Add caller files to mentioned_fnames for additional boosting
+        # This ensures callers are surfaced even without explicit bias
         if caller_boost_files:
             mentioned_fnames = mentioned_fnames | caller_boost_files
 
         # Step 5: Apply boosts and create ranked tags
         # Pass symbol_ranks for per-symbol ranking, git_weights for temporal boost,
-        # and temporal_mates for co-change boost
+        # temporal_mates for co-change boost, and caller_weights for reverse edge bias
         ranked_tags = self.boost_calculator.apply_boosts(
             included_files=included,
             tags_by_file=tags_by_file,
@@ -691,7 +692,8 @@ class GrepMap:
             mentioned_idents=combined_mentioned_idents,
             symbol_ranks=symbol_ranks,
             git_weights=git_weights,
-            temporal_mates=temporal_mates
+            temporal_mates=temporal_mates,
+            caller_weights=caller_weights
         )
 
         # Sort by rank (descending)

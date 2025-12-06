@@ -63,7 +63,8 @@ class BoostCalculator:
         mentioned_idents: Optional[Set[str]] = None,
         symbol_ranks: Optional[Dict[Tuple[str, str], float]] = None,
         git_weights: Optional[Dict[str, float]] = None,
-        temporal_mates: Optional[Dict[str, List[Tuple[str, float]]]] = None
+        temporal_mates: Optional[Dict[str, List[Tuple[str, float]]]] = None,
+        caller_weights: Optional[Dict[str, float]] = None
     ) -> List[RankedTag]:
         """Apply boosts to PageRank scores and create RankedTag list.
 
@@ -89,6 +90,9 @@ class BoostCalculator:
             temporal_mates: Optional dict mapping rel_fname to list of
                            (change_mate_fname, coupling_score) tuples.
                            Files that change together with chat files get boosted.
+            caller_weights: Optional dict mapping rel_fname to caller boost factor.
+                           Applied to files that call focus symbols (reverse edge).
+                           Uses recipe.reverse_edge_bias for intent-driven boost.
 
         Returns:
             List of RankedTag objects sorted by rank descending
@@ -126,6 +130,10 @@ class BoostCalculator:
             # Get git weight for this file (default 1.0 = no boost)
             git_weight = git_weights.get(rel_fname, 1.0) if git_weights else 1.0
 
+            # Get caller weight for reverse edge boost (default 1.0 = no boost)
+            # This surfaces files that CALL focus symbols when debugging
+            caller_weight = caller_weights.get(rel_fname, 1.0) if caller_weights else 1.0
+
             # Only boost definition tags (not references)
             for tag in tags:
                 if tag.kind == "def":
@@ -145,8 +153,8 @@ class BoostCalculator:
                         temporal_boost_files
                     )
 
-                    # Apply git weight (recency/churn/authorship)
-                    final_rank = base_rank * boost * git_weight
+                    # Apply git weight (recency/churn/authorship) and caller weight
+                    final_rank = base_rank * boost * git_weight * caller_weight
                     ranked_tags.append(RankedTag(final_rank, tag))
 
         # Sort by rank descending (highest importance first)

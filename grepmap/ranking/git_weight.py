@@ -69,18 +69,26 @@ class GitWeightCalculator:
         rel_fnames: List[str],
         use_recency: bool = True,
         use_churn: bool = True,
-        use_authorship: bool = False
+        use_authorship: bool = False,
+        recency_scale: float = 1.0,
+        churn_scale: float = 1.0
     ) -> Dict[str, float]:
         """Compute git-based weights for files.
 
         Fetches git history for the specified files and computes
         multiplicative weight factors based on enabled criteria.
 
+        The scale parameters allow intent-driven adjustment of boost strength:
+        - recency_scale: Multiplier for recency factor (1.0 = default)
+        - churn_scale: Multiplier for churn factor (1.0 = default)
+
         Args:
             rel_fnames: List of relative file paths to weight
             use_recency: Apply recency boost (exponential decay)
             use_churn: Apply churn boost (commit frequency)
             use_authorship: Apply authorship boost (current user)
+            recency_scale: Scale factor for recency boost (from RankingRecipe)
+            churn_scale: Scale factor for churn boost (from RankingRecipe)
 
         Returns:
             Dict mapping rel_fname to weight multiplier (>= 1.0)
@@ -105,15 +113,21 @@ class GitWeightCalculator:
                 continue
 
             # Recency boost: exponential decay based on age
+            # Scale factor adjusts how strongly recency affects ranking
             if use_recency and stats.get('last_modified'):
                 age_days = (now - stats['last_modified']).days
                 recency_factor = self._compute_recency_factor(age_days)
-                weight *= recency_factor
+                # Apply scale: 1.0 + (factor - 1.0) * scale
+                # This preserves neutral=1.0 while scaling the boost magnitude
+                scaled_recency = 1.0 + (recency_factor - 1.0) * recency_scale
+                weight *= scaled_recency
 
             # Churn boost: based on number of commits
+            # Higher churn_scale favors frequently changed code (e.g., REFACTOR intent)
             if use_churn and stats.get('commit_count'):
                 churn_factor = self._compute_churn_factor(stats['commit_count'])
-                weight *= churn_factor
+                scaled_churn = 1.0 + (churn_factor - 1.0) * churn_scale
+                weight *= scaled_churn
 
             # Authorship boost: if modified by current user
             if use_authorship and stats.get('authors'):
