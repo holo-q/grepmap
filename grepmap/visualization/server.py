@@ -505,6 +505,10 @@ cache</textarea>
                     <button class="btn" id="toggle-labels">Labels: ON</button>
                     <button class="btn" id="toggle-orphans">Orphans: ON</button>
                 </div>
+                <div class="btn-row" style="margin-top: 8px;">
+                    <button class="btn active" id="layout-force">Force</button>
+                    <button class="btn" id="layout-tree">Tree</button>
+                </div>
             </div>
 
             <div class="section">
@@ -546,9 +550,23 @@ let showLabels = true;
 let showOrphans = true;
 let cycleInterval = null;
 let cycleIndex = 0;
+let layoutMode = 'force'; // 'force' or 'tree'
 
 // Color scale for clusters
 const clusterColors = d3.scaleOrdinal(d3.schemeTableau10);
+
+// Opacity scale for rank (used in tree mode)
+function rankToOpacity(rank, minRank, maxRank) {
+    if (maxRank <= minRank) return 1;
+    const normalized = (rank - minRank) / (maxRank - minRank);
+    return 0.2 + 0.8 * normalized; // Range: 0.2 to 1.0
+}
+
+function rankToStrokeWidth(rank, minRank, maxRank) {
+    if (maxRank <= minRank) return 1;
+    const normalized = (rank - minRank) / (maxRank - minRank);
+    return 0.5 + 3 * normalized; // Range: 0.5 to 3.5
+}
 
 // SVG setup
 const svg = d3.select("#graph");
@@ -658,6 +676,23 @@ document.getElementById("toggle-orphans").addEventListener("click", (e) => {
     renderGraph();
 });
 
+// Layout mode toggles
+document.getElementById("layout-force").addEventListener("click", (e) => {
+    if (layoutMode === 'force') return;
+    layoutMode = 'force';
+    document.getElementById("layout-force").classList.add("active");
+    document.getElementById("layout-tree").classList.remove("active");
+    renderGraph();
+});
+
+document.getElementById("layout-tree").addEventListener("click", (e) => {
+    if (layoutMode === 'tree') return;
+    layoutMode = 'tree';
+    document.getElementById("layout-tree").classList.add("active");
+    document.getElementById("layout-force").classList.remove("active");
+    renderGraph();
+});
+
 function updateSimulation() {
     if (!simulation) return;
     const linkDist = +linkDistSlider.value;
@@ -698,8 +733,174 @@ async function fetchGraph(focus = null) {
 function renderGraph() {
     if (!graphData) return;
 
-    let nodes = graphData.nodes;
-    let edges = graphData.edges;
+    // Clear previous
+    linkGroup.selectAll("*").remove();
+    nodeGroup.selectAll("*").remove();
+    labelGroup.selectAll("*").remove();
+    if (simulation) simulation.stop();
+
+    if (layoutMode === 'tree') {
+        renderTreeLayout();
+    } else {
+        renderForceLayout();
+    }
+    updateStats();
+}
+
+// Tree layout: directory hierarchy with rank as intensity
+function renderTreeLayout() {
+    const nodes = graphData.nodes;
+    const edges = graphData.edges;
+
+    // Build hierarchy from file paths
+    const root = { name: ".", children: [], _nodes: [] };
+    const pathMap = new Map();
+    pathMap.set(".", root);
+
+    // Sort nodes by file path for consistent ordering
+    const sortedNodes = [...nodes].sort((a, b) => a.file.localeCompare(b.file));
+
+    // Get rank extent for opacity scaling
+    const rankExtent = d3.extent(nodes, d => d.rank);
+    const [minRank, maxRank] = rankExtent;
+
+    // Build tree structure
+    sortedNodes.forEach(node => {
+        const parts = node.file.split('/');
+        let currentPath = ".";
+        let parent = root;
+
+        // Create directory nodes
+        for (let i = 0; i < parts.length - 1; i++) {
+            currentPath += "/" + parts[i];
+            if (!pathMap.has(currentPath)) {
+                const dirNode = { name: parts[i], children: [], _nodes: [], _isDir: true, _path: currentPath };
+                parent.children.push(dirNode);
+                pathMap.set(currentPath, dirNode);
+            }
+            parent = pathMap.get(currentPath);
+        }
+
+        // Create file node (contains symbols)
+        const fileName = parts[parts.length - 1];
+        const filePath = currentPath + "/" + fileName;
+        if (!pathMap.has(filePath)) {
+            const fileNode = { name: fileName, children: [], _nodes: [], _isFile: true, _path: filePath };
+            parent.children.push(fileNode);
+            pathMap.set(filePath, fileNode);
+        }
+        pathMap.get(filePath)._nodes.push(node);
+    });
+
+    // Compute aggregate rank for files (max of symbols)
+    function computeRank(node) {
+        if (node._nodes && node._nodes.length > 0) {
+            node._rank = Math.max(...node._nodes.map(n => n.rank));
+        } else if (node.children && node.children.length > 0) {
+            node.children.forEach(computeRank);
+            node._rank = Math.max(...node.children.map(c => c._rank || 0));
+        } else {
+            node._rank = 0;
+        }
+    }
+    computeRank(root);
+
+    // Create D3 hierarchy
+    const hierarchy = d3.hierarchy(root);
+
+    // Tree layout
+    const treeLayout = d3.tree()
+        .size([height - 40, width - 300]);
+
+    treeLayout(hierarchy);
+
+    // Draw links
+    linkGroup.selectAll("path")
+        .data(hierarchy.links())
+        .enter()
+        .append("path")
+        .attr("fill", "none")
+        .attr("stroke", d => {
+            const rank = d.target.data._rank || 0;
+            return `rgba(88, 166, 255, ${rankToOpacity(rank, minRank, maxRank)})`;
+        })
+        .attr("stroke-width", d => rankToStrokeWidth(d.target.data._rank || 0, minRank, maxRank))
+        .attr("d", d3.linkHorizontal()
+            .x(d => d.y + 20)
+            .y(d => d.x + 20));
+
+    // Draw nodes
+    const nodeGs = nodeGroup.selectAll("g")
+        .data(hierarchy.descendants())
+        .enter()
+        .append("g")
+        .attr("transform", d => `translate(${d.y + 20},${d.x + 20})`)
+        .on("mouseover", (event, d) => showTreeTooltip(event, d))
+        .on("mouseout", hideTooltip);
+
+    nodeGs.append("circle")
+        .attr("r", d => {
+            if (d.data._isDir) return 4;
+            if (d.data._isFile) return 6;
+            return 3;
+        })
+        .attr("fill", d => {
+            const rank = d.data._rank || 0;
+            const opacity = rankToOpacity(rank, minRank, maxRank);
+            if (d.data._isDir) return `rgba(139, 148, 158, ${opacity})`;
+            if (d.data._isFile) return `rgba(88, 166, 255, ${opacity})`;
+            return `rgba(88, 166, 255, ${opacity})`;
+        })
+        .attr("stroke", d => d.data._isDir ? "none" : "#fff")
+        .attr("stroke-width", 1);
+
+    // Labels
+    if (showLabels) {
+        labelGroup.selectAll("text")
+            .data(hierarchy.descendants())
+            .enter()
+            .append("text")
+            .attr("x", d => d.y + 28)
+            .attr("y", d => d.x + 24)
+            .attr("font-size", d => d.data._isDir ? 11 : 10)
+            .attr("fill", d => {
+                const rank = d.data._rank || 0;
+                const opacity = rankToOpacity(rank, minRank, maxRank);
+                return `rgba(201, 209, 217, ${opacity})`;
+            })
+            .attr("font-weight", d => d.data._isDir ? "bold" : "normal")
+            .text(d => d.data.name);
+    }
+}
+
+function showTreeTooltip(event, d) {
+    const data = d.data;
+    let html = `<div class="file">${data._path || data.name}</div>`;
+
+    if (data._nodes && data._nodes.length > 0) {
+        html += `<div style="margin-top: 6px; font-size: 11px;">`;
+        html += `<strong>${data._nodes.length} symbols</strong><br>`;
+        const topSymbols = data._nodes.sort((a, b) => b.rank - a.rank).slice(0, 5);
+        topSymbols.forEach(n => {
+            html += `<div style="opacity: ${rankToOpacity(n.rank, 0, 0.01)}">${n.symbol}: ${n.rank.toFixed(4)}</div>`;
+        });
+        html += `</div>`;
+    }
+
+    if (data._rank) {
+        html += `<div style="margin-top: 6px;">Max rank: ${data._rank.toFixed(4)}</div>`;
+    }
+
+    tooltip.innerHTML = html;
+    tooltip.style.left = (event.pageX + 15) + "px";
+    tooltip.style.top = (event.pageY - 10) + "px";
+    tooltip.classList.add("show");
+}
+
+// Force layout: pre-solved, static display
+function renderForceLayout() {
+    let nodes = [...graphData.nodes];  // Clone to avoid mutation
+    let edges = [...graphData.edges];
 
     // Filter orphans if hidden
     if (!showOrphans) {
@@ -724,21 +925,37 @@ function renderGraph() {
         .range([4, 20])
         .clamp(true);
 
-    // Links
-    const linkData = linkGroup.selectAll("line").data(edges, d => `${d.source}-${d.target}`);
-    linkData.exit().remove();
-    const linkEnter = linkData.enter().append("line")
+    // Pre-solve simulation (run 300 ticks instantly)
+    simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(edges).id(d => d.id).distance(+linkDistSlider.value))
+        .force("charge", d3.forceManyBody().strength(+chargeSlider.value))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(d => sizeScale(d.rank) + 5))
+        .stop();  // Don't animate
+
+    // Run simulation synchronously
+    for (let i = 0; i < 300; i++) simulation.tick();
+
+    // Draw links at final positions
+    linkGroup.selectAll("line")
+        .data(edges)
+        .enter()
+        .append("line")
         .attr("stroke", "#30363d")
         .attr("stroke-opacity", 0.6)
-        .attr("stroke-width", d => Math.sqrt(d.weight));
-    const links = linkEnter.merge(linkData);
+        .attr("stroke-width", d => Math.sqrt(d.weight))
+        .attr("x1", d => d.source.x)
+        .attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x)
+        .attr("y2", d => d.target.y);
 
-    // Nodes
-    const nodeData = nodeGroup.selectAll("g").data(nodes, d => d.id);
-    nodeData.exit().remove();
-
-    const nodeEnter = nodeData.enter().append("g")
+    // Draw nodes at final positions
+    const nodeGs = nodeGroup.selectAll("g")
+        .data(nodes)
+        .enter()
+        .append("g")
         .attr("class", "node")
+        .attr("transform", d => `translate(${d.x},${d.y})`)
         .call(d3.drag()
             .on("start", dragStarted)
             .on("drag", dragged)
@@ -747,57 +964,48 @@ function renderGraph() {
         .on("mouseout", hideTooltip);
 
     // Different shapes for special nodes
-    nodeEnter.each(function(d) {
+    nodeGs.each(function(d) {
         const g = d3.select(this);
         const size = sizeScale(d.rank);
 
         if (d.is_bridge) {
-            // Diamond for bridges
             g.append("path")
                 .attr("d", d3.symbol().type(d3.symbolDiamond).size(size * size * 2))
                 .attr("fill", "#f0883e")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 1);
         } else {
-            // Circle for regular nodes
             g.append("circle")
                 .attr("r", size)
-                .attr("fill", d => d.is_orphan ? "#8b949e" : clusterColors(d.cluster))
-                .attr("stroke", d => d.is_api ? "#a371f7" : "#fff")
-                .attr("stroke-width", d => d.is_api ? 3 : 1);
+                .attr("fill", d.is_orphan ? "#8b949e" : clusterColors(d.cluster))
+                .attr("stroke", d.is_api ? "#a371f7" : "#fff")
+                .attr("stroke-width", d.is_api ? 3 : 1);
         }
     });
 
-    const nodeGs = nodeEnter.merge(nodeData);
+    // Labels at final positions
+    if (showLabels) {
+        labelGroup.selectAll("text")
+            .data(nodes)
+            .enter()
+            .append("text")
+            .attr("font-size", 10)
+            .attr("fill", "#8b949e")
+            .attr("x", d => d.x + 12)
+            .attr("y", d => d.y + 4)
+            .text(d => d.label);
+    }
 
-    // Labels
-    const labelData = labelGroup.selectAll("text").data(nodes, d => d.id);
-    labelData.exit().remove();
-    const labelEnter = labelData.enter().append("text")
-        .attr("font-size", 10)
-        .attr("fill", "#8b949e")
-        .attr("dx", 12)
-        .attr("dy", 4)
-        .text(d => d.label);
-    const labels = labelEnter.merge(labelData);
-    labelGroup.style("display", showLabels ? null : "none");
-
-    // Simulation
-    simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(edges).id(d => d.id).distance(+linkDistSlider.value))
-        .force("charge", d3.forceManyBody().strength(+chargeSlider.value))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide().radius(d => sizeScale(d.rank) + 5));
-
+    // Set up live simulation for drag interactions
     simulation.on("tick", () => {
-        links
+        linkGroup.selectAll("line")
             .attr("x1", d => d.source.x)
             .attr("y1", d => d.source.y)
             .attr("x2", d => d.target.x)
             .attr("y2", d => d.target.y);
 
-        nodeGs.attr("transform", d => `translate(${d.x},${d.y})`);
-        labels.attr("x", d => d.x).attr("y", d => d.y);
+        nodeGroup.selectAll("g").attr("transform", d => `translate(${d.x},${d.y})`);
+        labelGroup.selectAll("text").attr("x", d => d.x + 12).attr("y", d => d.y + 4);
     });
 }
 
