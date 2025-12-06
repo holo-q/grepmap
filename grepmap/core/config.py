@@ -136,3 +136,22 @@ TOKEN_COUNT_SAMPLE_LINES = 100
 # Maximum files to show in stats mode before truncating.
 # Stats mode is designed to pack many more files than symbol mode.
 STATS_MAX_FILES = 500
+
+
+# =============================================================================
+# Git Weighting Configuration
+# =============================================================================
+
+# Recency boost: exponential decay based on days since modification.
+# Files modified today get GIT_RECENCY_MAX_BOOST, decaying to 1.0 over time.
+GIT_RECENCY_DECAY_DAYS = 30.0    # Half-life in days for recency decay
+GIT_RECENCY_MAX_BOOST = 2.0     # Max boost for files modified today
+
+# Churn boost: based on number of commits touching a file.
+# Files with many commits are "hotspots" indicating active development.
+GIT_CHURN_THRESHOLD = 5         # Commits before churn boost kicks in
+GIT_CHURN_MAX_BOOST = 1.5       # Max boost for high-churn files
+
+# Authorship boost: applied if file was modified by current git user.
+# Assumes user's own code is more contextually relevant.
+GIT_AUTHOR_BOOST = 1.5          # Boost for files by current user

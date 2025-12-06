@@ -11,9 +11,13 @@ ranking, making the map more relevant to the current task.
 
 The boosts are multiplicative and can combine (e.g., a mentioned identifier
 in a chat file gets 20x * 10x = 200x boost).
+
+Supports both file-level and symbol-level ranking:
+- File-level: All symbols in a file share the file's PageRank score
+- Symbol-level: Each symbol gets its own PageRank score for fine-grained ranking
 """
 
-from typing import List, Dict, Set, Optional, Callable
+from typing import List, Dict, Set, Optional, Callable, Tuple
 from grepmap.core.types import Tag, RankedTag
 from grepmap.core.config import (
     BOOST_MENTIONED_IDENT, BOOST_MENTIONED_FILE, BOOST_CHAT_FILE,
@@ -56,24 +60,31 @@ class BoostCalculator:
         ranks: Dict[str, float],
         chat_fnames: List[str],
         mentioned_fnames: Optional[Set[str]] = None,
-        mentioned_idents: Optional[Set[str]] = None
+        mentioned_idents: Optional[Set[str]] = None,
+        symbol_ranks: Optional[Dict[Tuple[str, str], float]] = None,
+        git_weights: Optional[Dict[str, float]] = None
     ) -> List[RankedTag]:
         """Apply boosts to PageRank scores and create RankedTag list.
 
         The algorithm:
         1. For each file and its definition tags
-        2. Get base PageRank score for the file
-        3. Apply multiplicative boosts based on context
+        2. Get base PageRank score (symbol-level if available, else file-level)
+        3. Apply multiplicative boosts based on context and git metadata
         4. Create RankedTag with boosted score
         5. Sort by rank descending
 
         Args:
             included_files: List of absolute file paths that were processed
             tags_by_file: Dict mapping absolute fname to its list of tags
-            ranks: Dict mapping relative fname to PageRank score
+            ranks: Dict mapping relative fname to file-level PageRank score
             chat_fnames: List of chat file absolute paths
             mentioned_fnames: Set of mentioned file relative paths
             mentioned_idents: Set of mentioned identifier names
+            symbol_ranks: Optional dict mapping (rel_fname, symbol_name) to
+                         symbol-level PageRank. When provided, uses per-symbol
+                         ranks instead of file-level for fine-grained selection.
+            git_weights: Optional dict mapping rel_fname to git-based boost factor.
+                        Applied multiplicatively to favor recent/churning files.
 
         Returns:
             List of RankedTag objects sorted by rank descending
@@ -99,9 +110,18 @@ class BoostCalculator:
 
             tags = tags_by_file.get(fname, [])
 
+            # Get git weight for this file (default 1.0 = no boost)
+            git_weight = git_weights.get(rel_fname, 1.0) if git_weights else 1.0
+
             # Only boost definition tags (not references)
             for tag in tags:
                 if tag.kind == "def":
+                    # Get base rank: symbol-level if available, else file-level
+                    if symbol_ranks is not None:
+                        base_rank = symbol_ranks.get((rel_fname, tag.name), file_rank)
+                    else:
+                        base_rank = file_rank
+
                     # Calculate multiplicative boost based on context
                     boost = self._calculate_boost(
                         tag,
@@ -111,7 +131,8 @@ class BoostCalculator:
                         mentioned_idents
                     )
 
-                    final_rank = file_rank * boost
+                    # Apply git weight (recency/churn/authorship)
+                    final_rank = base_rank * boost * git_weight
                     ranked_tags.append(RankedTag(final_rank, tag))
 
         # Sort by rank descending (highest importance first)

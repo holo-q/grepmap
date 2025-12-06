@@ -160,6 +160,22 @@ Examples:
              "Maximizes information density by varying resolution based on importance."
     )
 
+    parser.add_argument(
+        "--no-symbol-rank",
+        action="store_true",
+        help="Disable symbol-level PageRank (use file-level only). "
+             "Symbol ranking surfaces individual important functions even from large files. "
+             "Disable if you prefer uniform file-based ranking."
+    )
+
+    parser.add_argument(
+        "--git-weight",
+        action="store_true",
+        help="Enable git-based weighting to boost recently modified files and hotspots. "
+             "Uses recency (exponential decay) and churn (commit frequency) signals. "
+             "Adds temporal awareness to favor actively developed code."
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -275,7 +291,9 @@ Examples:
         color=not args.no_color,
         directory_mode=use_directory_mode,
         stats_mode=args.stats,
-        adaptive_mode=args.adaptive
+        adaptive_mode=args.adaptive,
+        symbol_rank=not args.no_symbol_rank,
+        git_weight=args.git_weight
     )
     
     # Generate the map

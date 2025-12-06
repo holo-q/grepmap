@@ -23,7 +23,7 @@ from grepmap.core.config import (
 )
 from grepmap.cache import CacheManager
 from grepmap.extraction import get_tags_raw, extract_signature_info, extract_class_fields
-from grepmap.ranking import PageRanker, BoostCalculator, Optimizer, FocusResolver
+from grepmap.ranking import PageRanker, SymbolRanker, BoostCalculator, GitWeightCalculator, Optimizer, FocusResolver
 from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer
 from utils import count_tokens, read_text
 
@@ -66,7 +66,9 @@ class GrepMap:
         color: bool = True,
         directory_mode: bool = True,
         stats_mode: bool = False,
-        adaptive_mode: bool = False
+        adaptive_mode: bool = False,
+        symbol_rank: bool = True,
+        git_weight: bool = False
     ):
         """Initialize GrepMap facade and all subsystems."""
         # Core settings
@@ -85,7 +87,9 @@ class GrepMap:
         self.directory_mode = directory_mode
         self.stats_mode = stats_mode
         self.adaptive_mode = adaptive_mode
-        
+        self.symbol_rank = symbol_rank
+        self.git_weight = git_weight
+
         # Set up output handlers
         if output_handler_funcs is None:
             output_handler_funcs = {
@@ -111,8 +115,17 @@ class GrepMap:
             output_handler=self.output_handlers['warning']
         )
 
-        # PageRank calculator
+        # PageRank calculators (file-level and symbol-level)
         self.pageranker = PageRanker(
+            get_rel_fname=self.get_rel_fname,
+            verbose=self.verbose,
+            output_handlers=self.output_handlers
+        )
+
+        # Symbol-level ranker for fine-grained "tree shaking"
+        # When enabled, ranks individual symbols instead of whole files,
+        # allowing us to surface the ONE important function from a 50-function file
+        self.symbol_ranker = SymbolRanker(
             get_rel_fname=self.get_rel_fname,
             verbose=self.verbose,
             output_handlers=self.output_handlers
@@ -155,6 +168,13 @@ class GrepMap:
         )
 
         self.focus_resolver = FocusResolver(
+            root=self.root,
+            verbose=self.verbose,
+            output_handler=self.output_handlers['info']
+        )
+
+        # Git weight calculator for temporal relevance (recency, churn)
+        self.git_weight_calculator = GitWeightCalculator(
             root=self.root,
             verbose=self.verbose,
             output_handler=self.output_handlers['info']
@@ -449,20 +469,44 @@ class GrepMap:
         combined_mentioned_idents = mentioned_idents | focus_idents
 
         # Step 3: Compute PageRank scores
-        ranks = self.pageranker.compute_ranks(
-            all_fnames=included,
-            tags_by_file=tags_by_file,
-            chat_fnames=list(focus_files)  # Focus files get personalization boost
-        )
+        # Use symbol-level ranking when enabled for fine-grained "tree shaking"
+        symbol_ranks = None
+        if self.symbol_rank:
+            symbol_ranks, ranks = self.symbol_ranker.compute_ranks(
+                all_fnames=included,
+                tags_by_file=tags_by_file,
+                chat_fnames=list(focus_files)
+            )
+        else:
+            # Fall back to file-level ranking
+            ranks = self.pageranker.compute_ranks(
+                all_fnames=included,
+                tags_by_file=tags_by_file,
+                chat_fnames=list(focus_files)
+            )
 
-        # Step 4: Apply boosts and create ranked tags
+        # Step 4: Compute git weights if enabled (recency/churn/authorship)
+        git_weights = None
+        if self.git_weight:
+            rel_fnames = [self.get_rel_fname(f) for f in included]
+            git_weights = self.git_weight_calculator.compute_weights(
+                rel_fnames,
+                use_recency=True,
+                use_churn=True,
+                use_authorship=False  # Optional, can be enabled later
+            )
+
+        # Step 5: Apply boosts and create ranked tags
+        # Pass symbol_ranks for per-symbol ranking and git_weights for temporal boost
         ranked_tags = self.boost_calculator.apply_boosts(
             included_files=included,
             tags_by_file=tags_by_file,
             ranks=ranks,
             chat_fnames=list(focus_files),
             mentioned_fnames=mentioned_fnames,
-            mentioned_idents=combined_mentioned_idents
+            mentioned_idents=combined_mentioned_idents,
+            symbol_ranks=symbol_ranks,
+            git_weights=git_weights
         )
 
         # Sort by rank (descending)
