@@ -13,11 +13,17 @@ Main components:
 
 Example:
     from grepmap import GrepMap
-    
+
     mapper = GrepMap(map_tokens=2048, verbose=True)
     map_output, report = mapper.get_grep_map(
-        chat_files=[],
-        other_files=['src/main.py', 'src/utils.py']
+        focus_targets=['src/main.py'],  # Files to focus on (highest boost)
+        other_files=['src/utils.py', 'src/helpers.py']  # Additional context
+    )
+
+    # Legacy API still works for backwards compatibility:
+    map_output, report = mapper.get_grep_map(
+        chat_files=['src/main.py'],
+        other_files=['src/utils.py']
     )
 """
 

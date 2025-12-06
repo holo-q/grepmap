@@ -157,9 +157,11 @@ async def grep_map(
         return {"error": f"Failed to initialize RepoMap: {str(e)}"}
 
     try:
+        # Note: facade uses focus_targets (not chat_files) - these are the files
+        # that receive highest ranking boost and drive the map's focus
         map_content, file_report = await asyncio.to_thread(
             grep_mapper.get_grep_map,
-            chat_files=abs_chat_files,
+            focus_targets=abs_chat_files,  # chat_files → focus_targets
             other_files=abs_other_files,
             mentioned_fnames=mentioned_fnames_set,
             mentioned_idents=mentioned_idents_set,

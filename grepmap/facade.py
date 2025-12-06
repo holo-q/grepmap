@@ -245,7 +245,9 @@ class GrepMap:
         other_files: Optional[List[str]] = None,
         mentioned_fnames: Optional[Set[str]] = None,
         mentioned_idents: Optional[Set[str]] = None,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        # Backwards compatibility alias
+        chat_files: Optional[List[str]] = None
     ) -> Tuple[Optional[str], FileReport]:
         """Generate the grep map with file report.
 
@@ -260,10 +262,14 @@ class GrepMap:
             mentioned_fnames: Filenames mentioned in conversation (boost)
             mentioned_idents: Identifiers mentioned in conversation (boost)
             force_refresh: Force cache refresh
+            chat_files: DEPRECATED alias for focus_targets (backwards compatibility)
 
         Returns:
             Tuple of (formatted map string, file report)
         """
+        # Backwards compatibility: chat_files → focus_targets
+        if chat_files is not None and focus_targets is None:
+            focus_targets = chat_files
         if focus_targets is None:
             focus_targets = []
         if other_files is None:
