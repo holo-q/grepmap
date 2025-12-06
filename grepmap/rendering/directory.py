@@ -61,7 +61,8 @@ class DirectoryRenderer:
         tags: List[RankedTag],
         chat_files: Set[str],
         detail: DetailLevel,
-        overflow_tags: Optional[List[RankedTag]] = None
+        overflow_tags: Optional[List[RankedTag]] = None,
+        adaptive: bool = False
     ) -> str:
         """Render ranked tags as hierarchical directory overview.
 
@@ -70,6 +71,9 @@ class DirectoryRenderer:
             chat_files: Files currently in chat context
             detail: Level of detail for rendering (LOW/MEDIUM/HIGH)
             overflow_tags: Additional tags for low-resolution summaries
+            adaptive: If True, use per-file detail levels based on rank percentile.
+                      Focus files (chat_files) get HIGH, top 20% by rank get HIGH,
+                      middle 40% get MEDIUM, bottom 40% get LOW.
 
         Returns:
             Formatted directory overview with hierarchical symbol structure
@@ -96,12 +100,34 @@ class DirectoryRenderer:
             reverse=True
         )
 
+        # Compute per-file detail levels for adaptive mode
+        file_detail_levels: Dict[str, DetailLevel] = {}
+        if adaptive and sorted_files:
+            n_files = len(sorted_files)
+            for i, (rel_fname, _) in enumerate(sorted_files):
+                # Focus files always get HIGH
+                if rel_fname in chat_files:
+                    file_detail_levels[rel_fname] = DetailLevel.HIGH
+                else:
+                    # Percentile-based detail: top 20% HIGH, middle 40% MEDIUM, bottom 40% LOW
+                    percentile = 1.0 - (i / n_files)  # 1.0 for first file, 0.0 for last
+                    if percentile >= 0.8:
+                        file_detail_levels[rel_fname] = DetailLevel.HIGH
+                    elif percentile >= 0.4:
+                        file_detail_levels[rel_fname] = DetailLevel.MEDIUM
+                    else:
+                        file_detail_levels[rel_fname] = DetailLevel.LOW
+
         term_width = shutil.get_terminal_size().columns
 
         for rel_fname, file_tag_list in sorted_files:
+            # Determine detail level for this file (adaptive or global)
+            file_detail = file_detail_levels.get(rel_fname, detail) if adaptive else detail
+
             if self.verbose:
                 max_rank = max(rt.rank for rt in file_tag_list)
-                self.output_handler(f"  {rel_fname}: rank={max_rank:.4f}")
+                detail_str = f", {file_detail.name}" if adaptive else ""
+                self.output_handler(f"  {rel_fname}: rank={max_rank:.4f}{detail_str}")
 
             file_seen = seen_patterns[rel_fname]
 
@@ -136,7 +162,7 @@ class DirectoryRenderer:
 
             # Render classes with their fields and methods
             for class_tag in classes:
-                class_display = self._render_symbol(class_tag, detail, file_seen, name_color="bold cyan")
+                class_display = self._render_symbol(class_tag, file_detail, file_seen, name_color="bold cyan")
                 line = Text()
                 line.append("  class ", style="magenta")
                 line.append_text(class_display)
@@ -163,7 +189,7 @@ class DirectoryRenderer:
                 # Render fields indented under the class
                 if class_fields:
                     field_items = [
-                        self._render_field(f, detail) for f in class_fields
+                        self._render_field(f, file_detail) for f in class_fields
                     ]
                     self._render_labeled_list(
                         console, field_items, indent="    ", label="fields",
@@ -173,7 +199,7 @@ class DirectoryRenderer:
                 # Render properties indented under the class
                 if class_properties:
                     self._render_symbol_list(
-                        console, class_properties, detail, file_seen,
+                        console, class_properties, file_detail, file_seen,
                         indent="    ", label="props", term_width=term_width,
                         label_color="dim magenta", name_color="bright_cyan"
                     )
@@ -181,7 +207,7 @@ class DirectoryRenderer:
                 # Render methods indented under the class
                 if class_methods:
                     self._render_symbol_list(
-                        console, class_methods, detail, file_seen,
+                        console, class_methods, file_detail, file_seen,
                         indent="    ", label="def", term_width=term_width,
                         label_color="dim magenta", name_color="yellow"
                     )
@@ -189,7 +215,7 @@ class DirectoryRenderer:
             # Render top-level functions
             if top_level_funcs:
                 self._render_symbol_list(
-                    console, top_level_funcs, detail, file_seen,
+                    console, top_level_funcs, file_detail, file_seen,
                     indent="  ", label="def", term_width=term_width,
                     label_color="magenta", name_color="green"
                 )
@@ -197,7 +223,7 @@ class DirectoryRenderer:
             # Render constants
             if constants:
                 self._render_symbol_list(
-                    console, constants, detail, file_seen,
+                    console, constants, file_detail, file_seen,
                     indent="  ", label="const", term_width=term_width,
                     label_color="magenta", name_color="bright_green"
                 )

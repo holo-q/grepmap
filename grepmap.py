@@ -60,28 +60,37 @@ Examples:
     parser.add_argument(
         "--map-tokens",
         type=int,
-        default=8192,
-        help="Maximum tokens for the generated map (default: 8192)"
+        default=24576,
+        help="Maximum tokens for the generated map (default: 24576)"
     )
     
     parser.add_argument(
+        "--focus", "-f",
+        nargs="*",
+        help="Focus targets: file paths or search queries. Files get highest priority. "
+             "Queries like 'authentication' match symbol names across the codebase."
+    )
+
+    # Backwards compatibility alias for --focus
+    parser.add_argument(
         "--chat-files",
         nargs="*",
-        help="Files currently being edited (given higher priority)"
+        dest="chat_files_compat",
+        help="[Deprecated: use --focus] Files currently being edited"
     )
-    
+
     parser.add_argument(
         "--other-files",
         nargs="*",
         help="Other files to consider for the map"
     )
-    
+
     parser.add_argument(
         "--mentioned-files",
         nargs="*",
         help="Files explicitly mentioned (given higher priority)"
     )
-    
+
     parser.add_argument(
         "--mentioned-idents",
         nargs="*",
@@ -143,6 +152,14 @@ Examples:
              "Packs many more files into token budget for rapid complexity assessment."
     )
 
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="Use adaptive detail levels: focus files get HIGH detail, "
+             "top-ranked get HIGH, mid-ranked get MEDIUM, low-ranked get LOW. "
+             "Maximizes information density by varying resolution based on importance."
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -156,9 +173,14 @@ Examples:
         'error': tool_error
     }
     
-    # Process file arguments
-    chat_files_from_args = args.chat_files or [] # These are the paths as strings from the CLI
-    
+    # Process focus targets (combine --focus and deprecated --chat-files)
+    # Focus targets can be file paths OR search queries for symbol matching
+    focus_targets = []
+    if args.focus:
+        focus_targets.extend(args.focus)
+    if args.chat_files_compat:
+        focus_targets.extend(args.chat_files_compat)
+
     # Determine the list of unresolved path specifications that will form the 'other_files'
     # These can be files or directories. find_source_files will expand them.
     unresolved_paths_for_other_files_specs = []
@@ -173,55 +195,49 @@ Examples:
     effective_other_files_unresolved = []
     for path_spec_str in unresolved_paths_for_other_files_specs:
         effective_other_files_unresolved.extend(find_source_files(path_spec_str))
-    
-    # Convert to absolute paths
-    chat_files = [str(Path(f).resolve()) for f in chat_files_from_args]
+
     other_files = [str(Path(f).resolve()) for f in effective_other_files_unresolved]
 
     if args.verbose:
-        tool_output(f"Found {len(chat_files)} chat files, {len(other_files)} other files")
+        tool_output(f"Found {len(focus_targets)} focus targets, {len(other_files)} other files")
 
     # Auto-detect root if not explicitly provided and files are from outside current directory
     # This ensures that when you run "grepmap /some/other/path/file.py" it automatically
     # uses the correct repository root instead of the current directory
-    if args.root == "." and (chat_files or other_files):
-        all_files = chat_files + other_files
+    if args.root == "." and other_files:
         # Try to find git repository root
-        if all_files:
-            file_paths = [Path(f) for f in all_files]
-            # Start with the first file's parent and walk up looking for .git
-            search_path = file_paths[0].parent
-            git_root = None
-            # Walk up to find .git directory (max 20 levels to avoid infinite loop)
-            for _ in range(20):
-                if (search_path / ".git").exists():
-                    git_root = search_path
-                    break
-                if search_path.parent == search_path:
-                    break  # Reached filesystem root
-                search_path = search_path.parent
+        file_paths = [Path(f) for f in other_files]
+        # Start with the first file's parent and walk up looking for .git
+        search_path = file_paths[0].parent
+        git_root = None
+        # Walk up to find .git directory (max 20 levels to avoid infinite loop)
+        for _ in range(20):
+            if (search_path / ".git").exists():
+                git_root = search_path
+                break
+            if search_path.parent == search_path:
+                break  # Reached filesystem root
+            search_path = search_path.parent
 
-            # If we found a git root, use it; otherwise find common ancestor
-            if git_root:
-                root_path = git_root
-            else:
-                # Fall back to finding common ancestor directory
-                common_root = file_paths[0].parent
-                while not all(common_root in p.parents or common_root == p.parent for p in file_paths):
-                    if common_root.parent == common_root:
-                        common_root = Path(".").resolve()
-                        break
-                    common_root = common_root.parent
-                root_path = common_root
+        # If we found a git root, use it; otherwise find common ancestor
+        if git_root:
+            root_path = git_root
         else:
-            root_path = Path(args.root).resolve()
+            # Fall back to finding common ancestor directory
+            common_root = file_paths[0].parent
+            while not all(common_root in p.parents or common_root == p.parent for p in file_paths):
+                if common_root.parent == common_root:
+                    common_root = Path(".").resolve()
+                    break
+                common_root = common_root.parent
+            root_path = common_root
     else:
         root_path = Path(args.root).resolve()
 
     if args.verbose:
         print(f"Root path: {root_path}")
-        if chat_files:
-            print(f"Chat files: {chat_files}")
+        if focus_targets:
+            print(f"Focus targets: {focus_targets}")
 
     # Clear cache if requested
     if args.clear_cache:
@@ -243,8 +259,7 @@ Examples:
     use_directory_mode = not args.tree  # Default from flag
     if not args.tree:  # Only auto-detect if user didn't explicitly request tree mode
         # Use tree mode (not directory mode) if analyzing a single file
-        total_files = len(chat_files) + len(other_files)
-        if total_files == 1:
+        if len(other_files) == 1:
             use_directory_mode = False
 
     # Create GrepMap instance
@@ -259,13 +274,14 @@ Examples:
         exclude_unranked=args.exclude_unranked,
         color=not args.no_color,
         directory_mode=use_directory_mode,
-        stats_mode=args.stats
+        stats_mode=args.stats,
+        adaptive_mode=args.adaptive
     )
     
     # Generate the map
     try:
         map_content, file_report = grep_map.get_grep_map(
-            chat_files=chat_files,
+            focus_targets=focus_targets,
             other_files=other_files,
             mentioned_fnames=mentioned_fnames,
             mentioned_idents=mentioned_idents,

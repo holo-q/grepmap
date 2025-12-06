@@ -23,7 +23,7 @@ from grepmap.core.config import (
 )
 from grepmap.cache import CacheManager
 from grepmap.extraction import get_tags_raw, extract_signature_info, extract_class_fields
-from grepmap.ranking import PageRanker, BoostCalculator, Optimizer
+from grepmap.ranking import PageRanker, BoostCalculator, Optimizer, FocusResolver
 from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer
 from utils import count_tokens, read_text
 
@@ -65,7 +65,8 @@ class GrepMap:
         exclude_unranked: bool = False,
         color: bool = True,
         directory_mode: bool = True,
-        stats_mode: bool = False
+        stats_mode: bool = False,
+        adaptive_mode: bool = False
     ):
         """Initialize GrepMap facade and all subsystems."""
         # Core settings
@@ -83,6 +84,7 @@ class GrepMap:
         self.color = color
         self.directory_mode = directory_mode
         self.stats_mode = stats_mode
+        self.adaptive_mode = adaptive_mode
         
         # Set up output handlers
         if output_handler_funcs is None:
@@ -151,6 +153,12 @@ class GrepMap:
             verbose=self.verbose,
             output_handler=self.output_handlers['info']
         )
+
+        self.focus_resolver = FocusResolver(
+            root=self.root,
+            verbose=self.verbose,
+            output_handler=self.output_handlers['info']
+        )
     
     # =========================================================================
     # Public API - Main entry points
@@ -158,51 +166,53 @@ class GrepMap:
     
     def get_grep_map(
         self,
-        chat_files: Optional[List[str]] = None,
+        focus_targets: Optional[List[str]] = None,
         other_files: Optional[List[str]] = None,
         mentioned_fnames: Optional[Set[str]] = None,
         mentioned_idents: Optional[Set[str]] = None,
         force_refresh: bool = False
     ) -> Tuple[Optional[str], FileReport]:
         """Generate the grep map with file report.
-        
+
         Main entry point for generating repository maps. Orchestrates all subsystems
         to produce ranked, token-optimized output.
-        
+
         Args:
-            chat_files: Files currently in chat context (highest priority)
+            focus_targets: Focus targets - file paths OR search queries. Files get
+                          highest priority boost. Queries match symbol names across
+                          the codebase and boost matching files/identifiers.
             other_files: Other repository files to consider
             mentioned_fnames: Filenames mentioned in conversation (boost)
             mentioned_idents: Identifiers mentioned in conversation (boost)
             force_refresh: Force cache refresh
-            
+
         Returns:
             Tuple of (formatted map string, file report)
         """
-        if chat_files is None:
-            chat_files = []
+        if focus_targets is None:
+            focus_targets = []
         if other_files is None:
             other_files = []
-        
+
         # Create empty report for error cases
         empty_report = FileReport({}, 0, 0, 0)
-        
+
         if self.max_map_tokens <= 0 or not other_files:
             return None, empty_report
-        
-        # Adjust max_map_tokens if no chat files
+
+        # Adjust max_map_tokens if no focus targets
         max_map_tokens = self.max_map_tokens
-        if not chat_files and self.max_context_window:
+        if not focus_targets and self.max_context_window:
             available = self.max_context_window - CONTEXT_WINDOW_PADDING
             max_map_tokens = min(
                 max_map_tokens * self.map_mul_no_files,
                 available
             )
-        
+
         try:
             # Delegate to cached map generation
             map_string, file_report = self.get_ranked_tags_map(
-                chat_files, other_files, max_map_tokens,
+                focus_targets, other_files, max_map_tokens,
                 mentioned_fnames, mentioned_idents, force_refresh
             )
         except RecursionError:
@@ -218,8 +228,8 @@ class GrepMap:
             self.output_handlers['info'](f"Repo-map: {tokens / 1024:.1f} k-tokens")
         
         # Format final output
-        other = "other " if chat_files else ""
-        
+        other = "other " if focus_targets else ""
+
         if self.repo_content_prefix:
             repo_content = self.repo_content_prefix.format(other=other)
         else:
@@ -231,7 +241,7 @@ class GrepMap:
     
     def get_ranked_tags_map(
         self,
-        chat_fnames: List[str],
+        focus_targets: List[str],
         other_fnames: List[str],
         max_map_tokens: int,
         mentioned_fnames: Optional[Set[str]] = None,
@@ -240,27 +250,27 @@ class GrepMap:
     ) -> Tuple[Optional[str], FileReport]:
         """Get the ranked tags map with caching."""
         cache_key = (
-            tuple(sorted(chat_fnames)),
+            tuple(sorted(focus_targets)),
             tuple(sorted(other_fnames)),
             max_map_tokens,
             tuple(sorted(mentioned_fnames or [])),
             tuple(sorted(mentioned_idents or [])),
         )
-        
+
         if not force_refresh and cache_key in self.map_cache:
             return self.map_cache[cache_key]
-        
+
         result = self.get_ranked_tags_map_uncached(
-            chat_fnames, other_fnames, max_map_tokens,
+            focus_targets, other_fnames, max_map_tokens,
             mentioned_fnames, mentioned_idents
         )
-        
+
         self.map_cache[cache_key] = result
         return result
-    
+
     def get_ranked_tags_map_uncached(
         self,
-        chat_fnames: List[str],
+        focus_targets: List[str],
         other_fnames: List[str],
         max_map_tokens: int,
         mentioned_fnames: Optional[Set[str]] = None,
@@ -277,14 +287,14 @@ class GrepMap:
         In stats_mode, bypasses optimization and renders compact file statistics.
         """
         # Step 1: Get ranked tags using PageRank + boosts
-        ranked_tags, file_report = self.get_ranked_tags(
-            chat_fnames, other_fnames, mentioned_fnames, mentioned_idents
+        ranked_tags, file_report, focus_rel_fnames = self.get_ranked_tags(
+            focus_targets, other_fnames, mentioned_fnames, mentioned_idents
         )
 
         if not ranked_tags:
             return None, file_report
 
-        chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
+        chat_rel_fnames = focus_rel_fnames  # Alias for compatibility
         n = len(ranked_tags)
 
         # Stats mode: compact diagnostics view (LOC, def counts)
@@ -312,7 +322,9 @@ class GrepMap:
         def render_at_config(tags: List[RankedTag], detail: DetailLevel) -> str:
             """Render callback for optimizer."""
             if self.directory_mode:
-                return self.directory_renderer.render(tags, chat_rel_fnames, detail)
+                return self.directory_renderer.render(
+                    tags, chat_rel_fnames, detail, adaptive=self.adaptive_mode
+                )
             else:
                 return self.tree_renderer.render(tags, chat_rel_fnames, detail)
         
@@ -331,7 +343,8 @@ class GrepMap:
             minimal_tags = ranked_tags[:min(10, n)]
             if self.directory_mode:
                 return self.directory_renderer.render(
-                    minimal_tags, chat_rel_fnames, DetailLevel.LOW
+                    minimal_tags, chat_rel_fnames, DetailLevel.LOW,
+                    adaptive=self.adaptive_mode
                 ), file_report
             else:
                 return self.tree_renderer.render(minimal_tags, chat_rel_fnames, DetailLevel.LOW), file_report
@@ -347,99 +360,114 @@ class GrepMap:
             overflow_count = min(OVERFLOW_COUNT, n - num_selected)
             overflow = ranked_tags[num_selected:num_selected + overflow_count]
             output = self.directory_renderer.render(
-                selected_tags, chat_rel_fnames, detail, overflow_tags=overflow
+                selected_tags, chat_rel_fnames, detail,
+                overflow_tags=overflow, adaptive=self.adaptive_mode
             )
         
         return output, file_report
     
     def get_ranked_tags(
         self,
-        chat_fnames: List[str],
+        focus_targets: List[str],
         other_fnames: List[str],
         mentioned_fnames: Optional[Set[str]] = None,
         mentioned_idents: Optional[Set[str]] = None
-    ) -> Tuple[List[RankedTag], FileReport]:
+    ) -> Tuple[List[RankedTag], FileReport, Set[str]]:
         """Get ranked tags using PageRank algorithm with boosts.
-        
-        Orchestrates tag extraction, PageRank computation, and boost application.
-        
+
+        Orchestrates tag extraction, focus resolution, PageRank computation,
+        and boost application.
+
+        Args:
+            focus_targets: Focus targets (file paths or search queries)
+            other_fnames: Other files to include
+            mentioned_fnames: Mentioned file relative paths
+            mentioned_idents: Mentioned identifier names
+
         Returns:
-            Tuple of (ranked tags list, file report)
+            Tuple of (ranked tags list, file report, focus_rel_fnames)
         """
         # Return empty list and empty report if no files
-        if not chat_fnames and not other_fnames:
-            return [], FileReport({}, 0, 0, 0)
-        
+        if not focus_targets and not other_fnames:
+            return [], FileReport({}, 0, 0, 0), set()
+
         if mentioned_fnames is None:
             mentioned_fnames = set()
         if mentioned_idents is None:
             mentioned_idents = set()
-        
-        # Normalize paths to absolute
+
+        # Normalize other_fnames paths to absolute
         def normalize_path(path):
             return str(Path(path).resolve())
-        
-        chat_fnames = [normalize_path(f) for f in chat_fnames]
+
         other_fnames = [normalize_path(f) for f in other_fnames]
-        
+
         # Initialize file tracking
         included: List[str] = []
         excluded: Dict[str, str] = {}
-        
-        all_fnames = list(set(chat_fnames + other_fnames))
-        
+
+        all_fnames = list(set(other_fnames))
+
         if self.verbose:
             self.output_handlers['info'](f"Processing {len(all_fnames)} files for tag extraction...")
-        
+
         # Step 1: Extract tags for all files
         tags_by_file: Dict[str, List[Tag]] = {}
         total_definitions = 0
         total_references = 0
-        
+
         for idx, fname in enumerate(all_fnames):
             rel_fname = self.get_rel_fname(fname)
-            
+
             # Show progress
             if self.verbose and (idx % 100 == 0 or idx == len(all_fnames) - 1):
                 self.output_handlers['info'](f"  [{idx + 1}/{len(all_fnames)}] {rel_fname}")
-            
+
             if not os.path.exists(fname):
                 reason = "File not found"
                 excluded[fname] = f"[EXCLUDED] {reason}"
                 self.output_handlers['warning'](f"Repo-map can't include {fname}: {reason}")
                 continue
-            
+
             included.append(fname)
             tags = self.get_tags(fname, rel_fname)
             tags_by_file[fname] = tags
-            
+
             # Count definitions and references
             for tag in tags:
                 if tag.kind == "def":
                     total_definitions += 1
                 elif tag.kind == "ref":
                     total_references += 1
-        
-        # Step 2: Compute PageRank scores
+
+        # Step 2: Resolve focus targets (file paths or symbol queries)
+        focus_files, focus_idents = self.focus_resolver.resolve(
+            focus_targets, tags_by_file
+        )
+
+        # Combine focus_idents with mentioned_idents for boosting
+        combined_mentioned_idents = mentioned_idents | focus_idents
+
+        # Step 3: Compute PageRank scores
         ranks = self.pageranker.compute_ranks(
             all_fnames=included,
             tags_by_file=tags_by_file,
-            chat_fnames=chat_fnames
+            chat_fnames=list(focus_files)  # Focus files get personalization boost
         )
-        
-        # Step 3: Apply boosts and create ranked tags
+
+        # Step 4: Apply boosts and create ranked tags
         ranked_tags = self.boost_calculator.apply_boosts(
             included_files=included,
             tags_by_file=tags_by_file,
             ranks=ranks,
-            chat_fnames=chat_fnames,
+            chat_fnames=list(focus_files),
             mentioned_fnames=mentioned_fnames,
-            mentioned_idents=mentioned_idents
+            mentioned_idents=combined_mentioned_idents
         )
-        
+
         # Sort by rank (descending)
         ranked_tags.sort(key=lambda x: x.rank, reverse=True)
-        
+
         # Create file report
         file_report = FileReport(
             excluded=excluded,
@@ -447,8 +475,11 @@ class GrepMap:
             reference_matches=total_references,
             total_files_considered=len(all_fnames)
         )
-        
-        return ranked_tags, file_report
+
+        # Compute focus_rel_fnames for rendering
+        focus_rel_fnames = set(self.get_rel_fname(f) for f in focus_files)
+
+        return ranked_tags, file_report, focus_rel_fnames
     
     # =========================================================================
     # Tag Extraction with Caching

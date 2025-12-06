@@ -84,7 +84,8 @@ EXCLUDE_UNRANKED_THRESHOLD = 0.0001
 # =============================================================================
 
 # Default token budget for map output when not specified.
-DEFAULT_MAP_TOKENS = 1024
+# 24576 tokens allows HIGH detail for typical repos (~200 tags).
+DEFAULT_MAP_TOKENS = 24576
 
 # Multiplier for map tokens when no chat files present.
 # Expands the budget since there's no focused context to prioritize.
