@@ -176,7 +176,33 @@ class SymbolRanker:
         if self.verbose:
             self._log_stats(symbol_ranks, file_ranks, G)
 
+        # Collect diagnostic data
+        self._last_graph = G
+        self._last_symbol_ranks = symbol_ranks
+
         return dict(symbol_ranks), dict(file_ranks)
+
+    def get_diagnostic_data(self) -> dict:
+        """Get diagnostic data from last compute_ranks call."""
+        if not hasattr(self, '_last_graph') or self._last_graph is None:
+            return {}
+
+        G = self._last_graph
+
+        # Hub symbols (highest in-degree)
+        in_degrees = [(node, G.in_degree(node)) for node in G.nodes()]
+        sorted_hubs = sorted(in_degrees, key=lambda x: x[1], reverse=True)
+        hub_symbols = [(f"{node[1]}", deg) for node, deg in sorted_hubs[:10] if deg > 0]
+
+        # Orphan count (no incoming edges)
+        orphan_count = sum(1 for node in G.nodes() if G.in_degree(node) == 0)
+
+        return {
+            'num_symbols': G.number_of_nodes(),
+            'num_edges': G.number_of_edges(),
+            'hub_symbols': hub_symbols,
+            'orphan_count': orphan_count
+        }
 
     def _build_personalization(
         self,

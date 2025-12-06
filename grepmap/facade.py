@@ -68,7 +68,8 @@ class GrepMap:
         stats_mode: bool = False,
         adaptive_mode: bool = False,
         symbol_rank: bool = True,
-        git_weight: bool = False
+        git_weight: bool = False,
+        diagnose: bool = False
     ):
         """Initialize GrepMap facade and all subsystems."""
         # Core settings
@@ -89,6 +90,7 @@ class GrepMap:
         self.adaptive_mode = adaptive_mode
         self.symbol_rank = symbol_rank
         self.git_weight = git_weight
+        self.diagnose = diagnose
 
         # Set up output handlers
         if output_handler_funcs is None:
@@ -373,7 +375,13 @@ class GrepMap:
             self.output_handlers['info'](
                 f"Selected: {len(selected_tags)} tags, {detail.name} detail, {tokens} tokens"
             )
-        
+
+        # Diagnostic output: ultra-dense machine-readable stats
+        if self.diagnose:
+            self._output_diagnostics(
+                ranked_tags, selected_tags, detail, tokens, max_map_tokens
+            )
+
         # Step 4: Re-render with overflow tags for "also in scope" section
         if self.directory_mode and len(selected_tags) < n:
             num_selected = len(selected_tags)
@@ -495,6 +503,7 @@ class GrepMap:
                 use_churn=True,
                 use_authorship=False  # Optional, can be enabled later
             )
+        self._last_git_weights = git_weights  # Store for diagnostics
 
         # Step 5: Apply boosts and create ranked tags
         # Pass symbol_ranks for per-symbol ranking and git_weights for temporal boost
@@ -615,7 +624,59 @@ class GrepMap:
             Formatted code snippet with syntax highlighting
         """
         return self.tree_renderer._render_tree(abs_fname, rel_fname, lines_of_interest, None)
-    
+
+    def _output_diagnostics(
+        self,
+        ranked_tags: List[RankedTag],
+        selected_tags: List[RankedTag],
+        detail: DetailLevel,
+        tokens_used: int,
+        token_budget: int
+    ):
+        """Output ultra-dense diagnostic data for machine parsing.
+
+        Format: pipe-separated sections, each maximally compressed.
+        Designed for LLM consumption, not human readability.
+        """
+        from grepmap.diagnostics import collect_diagnostic_data, format_diagnostic
+
+        # Get graph data from symbol ranker
+        graph_data = {}
+        if self.symbol_rank and hasattr(self.symbol_ranker, 'get_diagnostic_data'):
+            graph_data = self.symbol_ranker.get_diagnostic_data()
+
+        # Get git weights if available
+        git_weights = getattr(self, '_last_git_weights', None)
+
+        data = collect_diagnostic_data(
+            num_symbols=graph_data.get('num_symbols', 0),
+            num_edges=graph_data.get('num_edges', 0),
+            hub_symbols=graph_data.get('hub_symbols', []),
+            orphan_count=graph_data.get('orphan_count', 0),
+            ranked_tags=ranked_tags,
+            git_weights=git_weights,
+            token_budget=token_budget,
+            tokens_used=tokens_used,
+            detail_level=detail,
+            tags_selected=len(selected_tags)
+        )
+
+        diag_line = format_diagnostic(data)
+
+        # Also add top symbols
+        symbol_refs = {}
+        if hasattr(self.symbol_ranker, '_last_graph'):
+            G = self.symbol_ranker._last_graph
+            if G:
+                for node in G.nodes():
+                    symbol_refs[node] = G.in_degree(node)
+
+        from grepmap.diagnostics import format_top_symbols
+        top_line = format_top_symbols(ranked_tags, symbol_refs, n=15)
+
+        self.output_handlers['info'](f"DIAG: {diag_line}")
+        self.output_handlers['info'](f"DIAG: {top_line}")
+
     # =========================================================================
     # Legacy Compatibility Methods
     # =========================================================================

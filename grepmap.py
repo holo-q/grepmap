@@ -176,6 +176,13 @@ Examples:
              "Adds temporal awareness to favor actively developed code."
     )
 
+    parser.add_argument(
+        "--diag",
+        action="store_true",
+        help="Output ultra-dense diagnostic data for ranking introspection. "
+             "Machine-readable format: graph stats, rank distribution, boost chain, HP values."
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -293,7 +300,8 @@ Examples:
         stats_mode=args.stats,
         adaptive_mode=args.adaptive,
         symbol_rank=not args.no_symbol_rank,
-        git_weight=args.git_weight
+        git_weight=args.git_weight,
+        diagnose=args.diag
     )
     
     # Generate the map
