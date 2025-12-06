@@ -1,3 +1,49 @@
+=== Dogfooding ===
+
+grepmap is a codebase cartography tool. When exploring THIS codebase, always reach for
+`grepmap` or `python -m grepmap` FIRST. This is the supper we serve ourselves:
+- Experience our own UX friction
+- Discover gaps in output format
+- Validate the tool does what we claim
+- The map we generate should orient us in our own territory
+
+Before spawning exploration agents or manual grep/glob hunts, let grepmap draw the map.
+
+=== Introspection via --diag ===
+
+`grepmap . --diag` outputs ultra-dense machine-readable diagnostics:
+```
+G:265n/332e/0.5%d hub:render:32 orph:172
+R:0.003/0.007/0.009/0.018 gini:0.08
+B:pr→sym*1.0→git*2.3→foc*20 chain:46x
+TOP:parse_markdo:0.018:23↓,Tag:0.008:6↓...
+```
+
+Key metrics to watch:
+- **gini**: 0.08=flat (no signal), 0.8+=concentrated (focus working)
+- **orph**: orphan symbols with 0 refs - noise floor indicator
+- **cliff@pN**: rank cliff at percentile N - how sharp is the cutoff
+- **chain**: max boost multiplication - sanity check on boost stacking
+
+Use --diag to feel the machine responding to inputs. Vary --focus, --git-weight,
+--map-tokens and observe how gini/cliff shift. The art is developing intuition
+for how the ranking beast steers.
+
+=== Situational Thinking ===
+
+Don't mechanically sweep hyperparameters. Instead, hallucinate situations:
+
+**Common scenarios:**
+- "Just cloned, wtf is this" → needs orientation, maybe --stats default?
+- "Debugging facade.py" → should auto-focus from git status, not require flag
+- "What calls get_ranked_tags?" → need graph navigation, not just ranking
+
+**Flag hell smell:** If using >3 flags, something's wrong. Good defaults should
+cover 90% of situations. Auto-detection > manual specification.
+
+**The question:** Does the beast steer itself cleanly, or require human twiddling?
+Observe whether focus shifts gini from 0.08→0.9 without explicit flags.
+
 === Work Standard ===
 
 * Use `ty check` and `uvx ruff check` after big changes to verify
