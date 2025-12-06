@@ -1,13 +1,21 @@
-=== Dogfooding ===
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  CRITICAL: USE GREPMAP FIRST - THIS IS NOT OPTIONAL                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 
-grepmap is a codebase cartography tool. When exploring THIS codebase, always reach for
-`grepmap` or `python -m grepmap` FIRST. This is the supper we serve ourselves:
-- Experience our own UX friction
-- Discover gaps in output format
-- Validate the tool does what we claim
-- The map we generate should orient us in our own territory
+Before using Glob, Grep, Read, or Task(Explore) on this codebase:
 
-Before spawning exploration agents or manual grep/glob hunts, let grepmap draw the map.
+    uv run python grepmap.py . --diag
+
+This is the ONLY way to:
+1. Experience the UX we're building (friction = bugs to fix)
+2. Validate the map orients YOU in our own territory
+3. Catch regressions in output quality before users do
+
+If grepmap's output doesn't answer your question → THAT'S A FEATURE GAP.
+File it mentally, then proceed with other tools.
+
+The map should make Glob/Grep unnecessary 80% of the time.
+If you're reaching for search tools first, ask: "Why didn't grepmap surface this?"
 
 === Introspection via --diag ===
 

@@ -179,6 +179,7 @@ Examples:
   %(prog)s .                    # Map current directory
   %(prog)s src/ --map-tokens 2048  # Map src/ with 2048 token limit
   %(prog)s file1.py file2.py    # Map specific files
+  %(prog)s --join src/          # Concatenate all files with syntax highlighting
   %(prog)s --chat-files main.py --other-files src/  # Specify chat vs other files
         """
     )
@@ -336,6 +337,11 @@ Examples:
              "By default, grepmap sniffs git status/diff to auto-focus on files you're working on."
     )
 
+    parser.add_argument(
+        "-e", "--ext",
+        help="Filter by file extensions (comma-separated). Example: -e py,js,ts"
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -381,6 +387,11 @@ Examples:
 
     other_files = [str(Path(f).resolve()) for f in effective_other_files_unresolved]
 
+    # Extension filter: -e py,js,ts filters to only those extensions
+    if args.ext:
+        exts = {f".{e.lstrip('.')}" for e in args.ext.split(',')}
+        other_files = [f for f in other_files if Path(f).suffix.lower() in exts]
+
     if args.verbose:
         tool_output(f"Found {len(focus_targets)} focus targets, {len(other_files)} other files")
 
@@ -421,6 +432,15 @@ Examples:
         print(f"Root path: {root_path}")
         if focus_targets:
             print(f"Focus targets: {focus_targets}")
+
+    # Join mode: output full file contents instead of symbol map
+    # This is a fundamentally different operation - just concat files with separators
+    if args.join:
+        if not other_files:
+            tool_error("No files to join. Provide paths or directories.")
+            sys.exit(1)
+        run_join_mode(other_files, root_path, use_color=not args.no_color, verbose=args.verbose)
+        return
 
     # Clear cache if requested
     if args.clear_cache:

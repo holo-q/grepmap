@@ -23,7 +23,10 @@ from grepmap.core.config import (
 )
 from grepmap.cache import CacheManager
 from grepmap.extraction import get_tags_raw, extract_signature_info, extract_class_fields
-from grepmap.ranking import PageRanker, SymbolRanker, BoostCalculator, GitWeightCalculator, Optimizer, FocusResolver
+from grepmap.ranking import (
+    PageRanker, SymbolRanker, BoostCalculator, GitWeightCalculator,
+    Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, IntentClassifier
+)
 from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer
 from utils import count_tokens, read_text
 
@@ -181,7 +184,24 @@ class GrepMap:
             verbose=self.verbose,
             output_handler=self.output_handlers['info']
         )
-    
+
+        # Temporal coupling: detect files that change together
+        self.temporal_coupling = TemporalCoupling(
+            root=self.root,
+            verbose=self.verbose,
+            output_handler=self.output_handlers['info']
+        )
+
+        # Confidence engine: detect ranking uncertainty
+        self.confidence_engine = ConfidenceEngine(
+            verbose=self.verbose
+        )
+
+        # Intent classifier: infer task type for recipe selection
+        self.intent_classifier = IntentClassifier(
+            verbose=self.verbose
+        )
+
     # =========================================================================
     # Public API - Main entry points
     # =========================================================================
@@ -674,8 +694,14 @@ class GrepMap:
         from grepmap.diagnostics import format_top_symbols
         top_line = format_top_symbols(ranked_tags, symbol_refs, n=15)
 
+        # Confidence analysis
+        ranks = [rt.rank for rt in ranked_tags]
+        confidence = self.confidence_engine.analyze(ranks, graph_data)
+        conf_line = f"CONF:{confidence.level} pat:{','.join(confidence.patterns) or 'none'} ent:{confidence.entropy:.2f} stab:{confidence.stability:.2f}"
+
         self.output_handlers['info'](f"DIAG: {diag_line}")
         self.output_handlers['info'](f"DIAG: {top_line}")
+        self.output_handlers['info'](f"DIAG: {conf_line}")
 
     # =========================================================================
     # Legacy Compatibility Methods
