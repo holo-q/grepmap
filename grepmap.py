@@ -10,10 +10,96 @@ Uses Tree-sitter for parsing and PageRank for ranking importance.
 import argparse
 import sys
 from pathlib import Path
+from typing import List
+
+from rich.console import Console
+from rich.syntax import Syntax
 
 from utils import count_tokens, read_text
 from grepmap_class import GrepMap
 from grepmap.discovery import find_source_files
+
+
+# Size threshold for warning in join mode (200KB)
+JOIN_SIZE_WARNING_THRESHOLD = 200 * 1024
+
+
+def run_join_mode(files: List[str], root: Path, use_color: bool, verbose: bool) -> None:
+    """
+    Output full file contents joined with clear separators.
+
+    This is a fundamentally different output mode from the symbol map - instead of
+    extracting signatures and ranking, we just concatenate full files. Useful for
+    small-to-medium projects where the full codebase artifact is manageable.
+
+    Args:
+        files: List of absolute file paths to join
+        root: Repository root for computing relative paths
+        use_color: Whether to apply syntax highlighting
+        verbose: Whether to print progress info
+    """
+    console = Console(force_terminal=use_color, no_color=not use_color)
+
+    # Collect all content first to check size
+    segments = []
+    total_size = 0
+
+    for fpath in sorted(files):
+        content = read_text(fpath)
+        if content is None:
+            continue
+
+        # Compute relative path for display
+        try:
+            rel_path = Path(fpath).relative_to(root)
+        except ValueError:
+            rel_path = Path(fpath)
+
+        total_size += len(content)
+        segments.append((str(rel_path), fpath, content))
+
+    # Warn if output is large
+    if total_size > JOIN_SIZE_WARNING_THRESHOLD:
+        size_kb = total_size / 1024
+        print(f"Warning: Output is {size_kb:.0f}KB ({len(segments)} files). "
+              f"Consider using the default map mode for large codebases.", file=sys.stderr)
+
+    if verbose:
+        print(f"Joining {len(segments)} files ({total_size / 1024:.1f}KB)", file=sys.stderr)
+
+    # Output with separators
+    separator = "─" * 80
+
+    for i, (rel_path, abs_path, content) in enumerate(segments):
+        # Bold header with relative path
+        if use_color:
+            console.print(f"\n[bold blue]{separator}[/bold blue]")
+            console.print(f"[bold white on blue] {rel_path} [/bold white on blue]")
+            console.print(f"[bold blue]{separator}[/bold blue]\n")
+        else:
+            print(f"\n{separator}")
+            print(f" {rel_path} ")
+            print(f"{separator}\n")
+
+        # Syntax-highlighted content
+        if use_color:
+            # Infer language from file extension
+            syntax = Syntax(
+                content,
+                lexer=Syntax.guess_lexer(abs_path, content),
+                theme="monokai",
+                line_numbers=False,
+                word_wrap=False
+            )
+            console.print(syntax)
+        else:
+            print(content)
+
+    # Final separator
+    if use_color:
+        console.print(f"\n[bold blue]{separator}[/bold blue]")
+    else:
+        print(f"\n{separator}")
 
 
 def tool_output(*messages):
@@ -29,6 +115,58 @@ def tool_warning(message):
 def tool_error(message):
     """Print error messages."""
     print(f"Error: {message}", file=sys.stderr)
+
+
+def detect_git_working_set(verbose: bool = False) -> list:
+    """Detect files in the git working set for auto-focus.
+
+    Sniffs git status and recent commits to find files you're actively working on.
+    Returns file paths that should be auto-focused.
+
+    Priority:
+    1. Uncommitted changes (staged + unstaged)
+    2. Files changed in last 3 commits by current user
+    """
+    import subprocess
+
+    working_set = set()
+
+    try:
+        # Get uncommitted changes (most relevant - actively editing)
+        result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if line and len(line) > 3:
+                    # Format: "XY filename" or "XY filename -> newname"
+                    path = line[3:].split(' -> ')[-1].strip()
+                    if path:
+                        working_set.add(path)
+
+        # Get recent commits by current user (secondary signal)
+        result = subprocess.run(
+            ['git', 'log', '--author', '$(git config user.email)',
+             '--format=', '--name-only', '-n', '3'],
+            capture_output=True, text=True, timeout=5, shell=True
+        )
+        # Fallback: just get recent changes regardless of author
+        if result.returncode != 0 or not result.stdout.strip():
+            result = subprocess.run(
+                ['git', 'diff', '--name-only', 'HEAD~3'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        working_set.add(line.strip())
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        # Not a git repo or git not available - no auto-focus
+        pass
+
+    return list(working_set)
 
 
 def main():
@@ -183,6 +321,21 @@ Examples:
              "Machine-readable format: graph stats, rank distribution, boost chain, HP values."
     )
 
+    parser.add_argument(
+        "--join",
+        action="store_true",
+        help="Output full file contents joined with clear separators. "
+             "Useful for creating a concatenated codebase artifact when the project isn't too large. "
+             "Uses syntax highlighting. Warns if output exceeds 200KB."
+    )
+
+    parser.add_argument(
+        "--no-auto-focus",
+        action="store_true",
+        help="Disable automatic focus detection from git working set. "
+             "By default, grepmap sniffs git status/diff to auto-focus on files you're working on."
+    )
+
     args = parser.parse_args()
     
     # Set up token counter with specified model
@@ -203,6 +356,13 @@ Examples:
         focus_targets.extend(args.focus)
     if args.chat_files_compat:
         focus_targets.extend(args.chat_files_compat)
+
+    # Auto-focus: sniff git working set when no explicit focus provided
+    # This makes grepmap "just work" - it knows what you're working on
+    if not focus_targets and not args.no_auto_focus:
+        focus_targets = detect_git_working_set(args.verbose)
+        if focus_targets and args.verbose:
+            tool_output(f"Auto-focus: {len(focus_targets)} files from git working set")
 
     # Determine the list of unresolved path specifications that will form the 'other_files'
     # These can be files or directories. find_source_files will expand them.
