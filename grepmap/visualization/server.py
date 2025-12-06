@@ -747,154 +747,269 @@ function renderGraph() {
     updateStats();
 }
 
-// Tree layout: directory hierarchy with rank as intensity
+// Tree layout: same nodes as force, but edges are directory hierarchy
+// Force-solved with downward bias (directories pull children down)
 function renderTreeLayout() {
-    const nodes = graphData.nodes;
-    const edges = graphData.edges;
+    let nodes = [...graphData.nodes];  // All symbol nodes
 
-    // Build hierarchy from file paths
-    const root = { name: ".", children: [], _nodes: [] };
-    const pathMap = new Map();
-    pathMap.set(".", root);
+    // Filter orphans if hidden
+    if (!showOrphans) {
+        const connectedIds = new Set();
+        graphData.edges.forEach(e => {
+            connectedIds.add(e.source);
+            connectedIds.add(e.target);
+        });
+        nodes = nodes.filter(n => connectedIds.has(n.id));
+    }
 
-    // Sort nodes by file path for consistent ordering
-    const sortedNodes = [...nodes].sort((a, b) => a.file.localeCompare(b.file));
-
-    // Get rank extent for opacity scaling
+    // Get rank extent for styling
     const rankExtent = d3.extent(nodes, d => d.rank);
     const [minRank, maxRank] = rankExtent;
 
-    // Build tree structure
-    sortedNodes.forEach(node => {
-        const parts = node.file.split('/');
+    const sizeScale = d3.scaleLog()
+        .domain([Math.max(minRank, 0.0001), Math.max(maxRank, 0.001)])
+        .range([4, 20])
+        .clamp(true);
+
+    // Build directory structure - create virtual dir/file nodes
+    const dirNodes = [];
+    const dirMap = new Map();  // path -> node
+    const fileMap = new Map(); // file path -> node
+
+    // Create root
+    const rootNode = { id: "dir:.", label: ".", _isDir: true, _depth: 0, rank: 0 };
+    dirNodes.push(rootNode);
+    dirMap.set(".", rootNode);
+
+    // Create directory and file nodes from symbol paths
+    nodes.forEach(symbolNode => {
+        const parts = symbolNode.file.split('/');
         let currentPath = ".";
-        let parent = root;
 
-        // Create directory nodes
+        // Create directory chain
         for (let i = 0; i < parts.length - 1; i++) {
-            currentPath += "/" + parts[i];
-            if (!pathMap.has(currentPath)) {
-                const dirNode = { name: parts[i], children: [], _nodes: [], _isDir: true, _path: currentPath };
-                parent.children.push(dirNode);
-                pathMap.set(currentPath, dirNode);
+            const parentPath = currentPath;
+            currentPath = currentPath === "." ? parts[i] : currentPath + "/" + parts[i];
+
+            if (!dirMap.has(currentPath)) {
+                const dirNode = {
+                    id: "dir:" + currentPath,
+                    label: parts[i],
+                    _isDir: true,
+                    _depth: i + 1,
+                    _parent: parentPath,
+                    rank: 0
+                };
+                dirNodes.push(dirNode);
+                dirMap.set(currentPath, dirNode);
             }
-            parent = pathMap.get(currentPath);
         }
 
-        // Create file node (contains symbols)
-        const fileName = parts[parts.length - 1];
-        const filePath = currentPath + "/" + fileName;
-        if (!pathMap.has(filePath)) {
-            const fileNode = { name: fileName, children: [], _nodes: [], _isFile: true, _path: filePath };
-            parent.children.push(fileNode);
-            pathMap.set(filePath, fileNode);
+        // Create file node if not exists
+        const filePath = symbolNode.file;
+        if (!fileMap.has(filePath)) {
+            const parentPath = parts.length > 1
+                ? (parts.slice(0, -1).join('/') || ".")
+                : ".";
+            const fileNode = {
+                id: "file:" + filePath,
+                label: parts[parts.length - 1],
+                _isFile: true,
+                _depth: parts.length,
+                _parent: parentPath,
+                _symbols: [],
+                rank: 0
+            };
+            dirNodes.push(fileNode);
+            fileMap.set(filePath, fileNode);
         }
-        pathMap.get(filePath)._nodes.push(node);
+        fileMap.get(filePath)._symbols.push(symbolNode);
     });
 
-    // Compute aggregate rank for files (max of symbols)
-    function computeRank(node) {
-        if (node._nodes && node._nodes.length > 0) {
-            node._rank = Math.max(...node._nodes.map(n => n.rank));
-        } else if (node.children && node.children.length > 0) {
-            node.children.forEach(computeRank);
-            node._rank = Math.max(...node.children.map(c => c._rank || 0));
-        } else {
-            node._rank = 0;
+    // Compute file ranks as max of their symbols
+    fileMap.forEach(fileNode => {
+        if (fileNode._symbols.length > 0) {
+            fileNode.rank = Math.max(...fileNode._symbols.map(s => s.rank));
         }
+    });
+
+    // Propagate ranks up to directories
+    function propagateRank(path) {
+        const node = dirMap.get(path);
+        if (!node) return 0;
+
+        let maxRank = 0;
+        // Check child dirs
+        dirMap.forEach((child, childPath) => {
+            if (child._parent === path) {
+                maxRank = Math.max(maxRank, propagateRank(childPath));
+            }
+        });
+        // Check child files
+        fileMap.forEach((file, filePath) => {
+            if (file._parent === path) {
+                maxRank = Math.max(maxRank, file.rank);
+            }
+        });
+        node.rank = maxRank;
+        return maxRank;
     }
-    computeRank(root);
+    propagateRank(".");
 
-    // Create D3 hierarchy
-    const hierarchy = d3.hierarchy(root);
+    // Combine all nodes: dirs + files + symbols
+    const allNodes = [...dirNodes, ...nodes];
 
-    // Tree layout
-    const treeLayout = d3.tree()
-        .size([height - 40, width - 300]);
+    // Build hierarchical edges (parent -> child)
+    const hierEdges = [];
 
-    treeLayout(hierarchy);
+    // Dir -> child dir edges
+    dirMap.forEach((node, path) => {
+        if (node._parent !== undefined) {
+            const parent = dirMap.get(node._parent);
+            if (parent) {
+                hierEdges.push({ source: parent.id, target: node.id, weight: 1 });
+            }
+        }
+    });
 
-    // Draw links
-    linkGroup.selectAll("path")
-        .data(hierarchy.links())
+    // Dir -> file edges
+    fileMap.forEach((file, path) => {
+        const parent = dirMap.get(file._parent);
+        if (parent) {
+            hierEdges.push({ source: parent.id, target: file.id, weight: 1 });
+        }
+    });
+
+    // File -> symbol edges
+    nodes.forEach(symbolNode => {
+        const file = fileMap.get(symbolNode.file);
+        if (file) {
+            hierEdges.push({ source: file.id, target: symbolNode.id, weight: 0.5 });
+        }
+    });
+
+    // Pre-solve with forces that encourage tree structure
+    // - Strong charge does most of the separation work (O(n log n) with Barnes-Hut)
+    // - Collision is expensive, so keep radii modest and rely on charge
+    // - Y force creates hierarchical layering
+    simulation = d3.forceSimulation(allNodes)
+        .force("link", d3.forceLink(hierEdges).id(d => d.id).distance(50).strength(0.3))
+        .force("charge", d3.forceManyBody().strength(-300).distanceMax(400))
+        .force("x", d3.forceX(width / 2).strength(0.01))
+        .force("y", d3.forceY().y(d => {
+            // Push down based on depth: dirs at top, files below, symbols at bottom
+            const depth = d._depth !== undefined ? d._depth : (d._isFile ? 10 : 15);
+            return 50 + depth * 70;
+        }).strength(0.5))
+        .force("collision", d3.forceCollide().radius(d => {
+            if (d._isDir) return 15;
+            if (d._isFile) return 18;
+            return sizeScale(d.rank) + 8;
+        }))
+        .stop();
+
+    // 200 ticks is enough with strong charge - keeps UI responsive during cycling
+    for (let i = 0; i < 200; i++) simulation.tick();
+
+    // Draw edges with opacity based on target rank
+    linkGroup.selectAll("line")
+        .data(hierEdges)
         .enter()
-        .append("path")
-        .attr("fill", "none")
+        .append("line")
         .attr("stroke", d => {
-            const rank = d.target.data._rank || 0;
+            const target = allNodes.find(n => n.id === d.target.id || n.id === d.target);
+            const rank = target ? target.rank : 0;
             return `rgba(88, 166, 255, ${rankToOpacity(rank, minRank, maxRank)})`;
         })
-        .attr("stroke-width", d => rankToStrokeWidth(d.target.data._rank || 0, minRank, maxRank))
-        .attr("d", d3.linkHorizontal()
-            .x(d => d.y + 20)
-            .y(d => d.x + 20));
+        .attr("stroke-width", d => {
+            const target = allNodes.find(n => n.id === d.target.id || n.id === d.target);
+            const rank = target ? target.rank : 0;
+            return rankToStrokeWidth(rank, minRank, maxRank);
+        })
+        .attr("x1", d => d.source.x)
+        .attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x)
+        .attr("y2", d => d.target.y);
 
     // Draw nodes
     const nodeGs = nodeGroup.selectAll("g")
-        .data(hierarchy.descendants())
+        .data(allNodes)
         .enter()
         .append("g")
-        .attr("transform", d => `translate(${d.y + 20},${d.x + 20})`)
-        .on("mouseover", (event, d) => showTreeTooltip(event, d))
+        .attr("transform", d => `translate(${d.x},${d.y})`)
+        .on("mouseover", showTooltip)
         .on("mouseout", hideTooltip);
 
-    nodeGs.append("circle")
-        .attr("r", d => {
-            if (d.data._isDir) return 4;
-            if (d.data._isFile) return 6;
-            return 3;
-        })
-        .attr("fill", d => {
-            const rank = d.data._rank || 0;
-            const opacity = rankToOpacity(rank, minRank, maxRank);
-            if (d.data._isDir) return `rgba(139, 148, 158, ${opacity})`;
-            if (d.data._isFile) return `rgba(88, 166, 255, ${opacity})`;
-            return `rgba(88, 166, 255, ${opacity})`;
-        })
-        .attr("stroke", d => d.data._isDir ? "none" : "#fff")
-        .attr("stroke-width", 1);
+    nodeGs.each(function(d) {
+        const g = d3.select(this);
+        const opacity = rankToOpacity(d.rank, minRank, maxRank);
+
+        if (d._isDir) {
+            // Directory: small gray square
+            g.append("rect")
+                .attr("x", -4).attr("y", -4)
+                .attr("width", 8).attr("height", 8)
+                .attr("fill", `rgba(139, 148, 158, ${opacity})`)
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 0.5);
+        } else if (d._isFile) {
+            // File: medium circle
+            g.append("circle")
+                .attr("r", 6)
+                .attr("fill", `rgba(136, 192, 208, ${opacity})`)
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 1);
+        } else {
+            // Symbol: sized by rank, colored by cluster
+            const size = sizeScale(d.rank);
+            if (d.is_bridge) {
+                g.append("path")
+                    .attr("d", d3.symbol().type(d3.symbolDiamond).size(size * size * 2))
+                    .attr("fill", `rgba(240, 136, 62, ${opacity})`)
+                    .attr("stroke", "#fff")
+                    .attr("stroke-width", 1);
+            } else {
+                g.append("circle")
+                    .attr("r", size)
+                    .attr("fill", d.is_orphan
+                        ? `rgba(139, 148, 158, ${opacity})`
+                        : `rgba(88, 166, 255, ${opacity})`)
+                    .attr("stroke", d.is_api ? "#a371f7" : "#fff")
+                    .attr("stroke-width", d.is_api ? 2 : 1)
+                    .attr("opacity", opacity);
+            }
+        }
+    });
 
     // Labels
     if (showLabels) {
         labelGroup.selectAll("text")
-            .data(hierarchy.descendants())
+            .data(allNodes)
             .enter()
             .append("text")
-            .attr("x", d => d.y + 28)
-            .attr("y", d => d.x + 24)
-            .attr("font-size", d => d.data._isDir ? 11 : 10)
+            .attr("x", d => d.x + (d._isDir ? 8 : d._isFile ? 10 : 12))
+            .attr("y", d => d.y + 4)
+            .attr("font-size", d => d._isDir ? 11 : d._isFile ? 10 : 9)
             .attr("fill", d => {
-                const rank = d.data._rank || 0;
-                const opacity = rankToOpacity(rank, minRank, maxRank);
+                const opacity = rankToOpacity(d.rank, minRank, maxRank);
                 return `rgba(201, 209, 217, ${opacity})`;
             })
-            .attr("font-weight", d => d.data._isDir ? "bold" : "normal")
-            .text(d => d.data.name);
-    }
-}
-
-function showTreeTooltip(event, d) {
-    const data = d.data;
-    let html = `<div class="file">${data._path || data.name}</div>`;
-
-    if (data._nodes && data._nodes.length > 0) {
-        html += `<div style="margin-top: 6px; font-size: 11px;">`;
-        html += `<strong>${data._nodes.length} symbols</strong><br>`;
-        const topSymbols = data._nodes.sort((a, b) => b.rank - a.rank).slice(0, 5);
-        topSymbols.forEach(n => {
-            html += `<div style="opacity: ${rankToOpacity(n.rank, 0, 0.01)}">${n.symbol}: ${n.rank.toFixed(4)}</div>`;
-        });
-        html += `</div>`;
+            .attr("font-weight", d => d._isDir ? "bold" : "normal")
+            .text(d => d.label);
     }
 
-    if (data._rank) {
-        html += `<div style="margin-top: 6px;">Max rank: ${data._rank.toFixed(4)}</div>`;
-    }
-
-    tooltip.innerHTML = html;
-    tooltip.style.left = (event.pageX + 15) + "px";
-    tooltip.style.top = (event.pageY - 10) + "px";
-    tooltip.classList.add("show");
+    // Enable drag on simulation
+    simulation.on("tick", () => {
+        linkGroup.selectAll("line")
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+        nodeGroup.selectAll("g").attr("transform", d => `translate(${d.x},${d.y})`);
+        labelGroup.selectAll("text")
+            .attr("x", d => d.x + (d._isDir ? 8 : d._isFile ? 10 : 12))
+            .attr("y", d => d.y + 4);
+    });
 }
 
 // Force layout: pre-solved, static display
