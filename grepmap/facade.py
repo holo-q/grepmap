@@ -26,7 +26,7 @@ from grepmap.extraction import get_tags_raw, extract_signature_info, extract_cla
 from grepmap.ranking import (
     PageRanker, SymbolRanker, BoostCalculator, GitWeightCalculator,
     Optimizer, FocusResolver, TemporalCoupling, ConfidenceEngine, IntentClassifier,
-    CallerResolver, BridgeDetector, SurfaceDetector, Intent
+    CallerResolver, BridgeDetector, SurfaceDetector, Intent, SymbolStoryExtractor
 )
 from grepmap.rendering import TreeRenderer, DirectoryRenderer, StatsRenderer, ClusterRenderer, should_use_clusters
 from utils import count_tokens, read_text
@@ -225,6 +225,14 @@ class GrepMap:
         # Groups symbols by directory instead of flat ranking
         self.cluster_renderer = ClusterRenderer(
             verbose=self.verbose
+        )
+
+        # Symbol story extractor: per-symbol git history
+        # Shows creation date, commit count, authorship for symbols
+        self.story_extractor = SymbolStoryExtractor(
+            root=self.root,
+            verbose=self.verbose,
+            output_handler=self.output_handlers['info']
         )
 
     # =========================================================================
@@ -844,6 +852,21 @@ class GrepMap:
         if caller_files:
             caller_line = f"CALLERS: {len(caller_files)} files boosted"
 
+        # Symbol story cards for top 3 symbols
+        story_lines = []
+        for rt in ranked_tags[:3]:
+            tag = rt.tag
+            if hasattr(tag, 'line') and hasattr(tag, 'fname'):
+                # Estimate end line (we don't have it, use +10 as proxy)
+                line_start = tag.line
+                line_end = line_start + 10
+                rel_fname = self.get_rel_fname(tag.fname)
+                story = self.story_extractor.get_story(
+                    tag.name, rel_fname, line_start, line_end
+                )
+                if story and story.total_commits > 0:
+                    story_lines.append(self.story_extractor.format_story_card(story))
+
         self.output_handlers['info'](f"DIAG: {diag_line}")
         self.output_handlers['info'](f"DIAG: {top_line}")
         self.output_handlers['info'](f"DIAG: {conf_line}")
@@ -854,6 +877,8 @@ class GrepMap:
             self.output_handlers['info'](f"DIAG: {surface_line}")
         if caller_line:
             self.output_handlers['info'](f"DIAG: {caller_line}")
+        if story_lines:
+            self.output_handlers['info'](f"DIAG: STORIES: {' | '.join(story_lines)}")
 
     # =========================================================================
     # Helper Methods

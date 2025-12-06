@@ -32,6 +32,7 @@ from grepmap.ranking.intent import IntentClassifier, Intent, RankingRecipe
 from grepmap.ranking.callers import CallerResolver
 from grepmap.ranking.bridges import BridgeDetector, BridgeInfo
 from grepmap.ranking.surface import SurfaceDetector, SurfaceType, SurfaceInfo
+from grepmap.ranking.story import SymbolStoryExtractor, SymbolStory, SymbolCommit
 
 __all__ = [
     'PageRanker', 'SymbolRanker', 'get_symbol_ranks_for_file',
@@ -39,5 +40,6 @@ __all__ = [
     'TemporalCoupling', 'ConfidenceEngine', 'ConfidenceResult',
     'IntentClassifier', 'Intent', 'RankingRecipe',
     'CallerResolver', 'BridgeDetector', 'BridgeInfo',
-    'SurfaceDetector', 'SurfaceType', 'SurfaceInfo'
+    'SurfaceDetector', 'SurfaceType', 'SurfaceInfo',
+    'SymbolStoryExtractor', 'SymbolStory', 'SymbolCommit'
 ]
