@@ -444,13 +444,20 @@ class GrepMap:
                     if info.surface_type.value == 'api'
                 }
 
+        # Step 1d: Compute git badges and file phases for temporal annotations
+        # These surface git-derived temporal signals in the map
+        rel_fnames_for_badges = list({rt.tag.rel_fname for rt in ranked_tags})
+        git_badges = self.git_weight_calculator.compute_badges(rel_fnames_for_badges)
+        file_phases = self.git_weight_calculator.classify_phases(rel_fnames_for_badges)
+
         # Step 2: Create renderer function for optimizer
         def render_at_config(tags: List[RankedTag], detail: DetailLevel) -> str:
             """Render callback for optimizer."""
             if self.directory_mode:
                 return self.directory_renderer.render(
                     tags, chat_rel_fnames, detail, adaptive=self.adaptive_mode,
-                    bridge_files=bridge_files, api_symbols=api_symbols
+                    bridge_files=bridge_files, api_symbols=api_symbols,
+                    git_badges=git_badges, file_phases=file_phases
                 )
             else:
                 return self.tree_renderer.render(tags, chat_rel_fnames, detail)
@@ -472,7 +479,8 @@ class GrepMap:
                 return self.directory_renderer.render(
                     minimal_tags, chat_rel_fnames, DetailLevel.LOW,
                     adaptive=self.adaptive_mode,
-                    bridge_files=bridge_files, api_symbols=api_symbols
+                    bridge_files=bridge_files, api_symbols=api_symbols,
+                    git_badges=git_badges, file_phases=file_phases
                 ), file_report
             else:
                 return self.tree_renderer.render(minimal_tags, chat_rel_fnames, DetailLevel.LOW), file_report
@@ -497,7 +505,8 @@ class GrepMap:
             output = self.directory_renderer.render(
                 selected_tags, chat_rel_fnames, detail,
                 overflow_tags=overflow, adaptive=self.adaptive_mode,
-                bridge_files=bridge_files, api_symbols=api_symbols
+                bridge_files=bridge_files, api_symbols=api_symbols,
+                git_badges=git_badges, file_phases=file_phases
             )
 
         # Step 5: Prepend confidence header for user awareness

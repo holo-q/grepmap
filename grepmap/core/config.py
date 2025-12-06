@@ -160,3 +160,29 @@ GIT_CHURN_MAX_BOOST = 1.5       # Max boost for high-churn files
 # Authorship boost: applied if file was modified by current git user.
 # Assumes user's own code is more contextually relevant.
 GIT_AUTHOR_BOOST = 1.5          # Boost for files by current user
+
+# =============================================================================
+# Git Badge Thresholds (for display, not ranking)
+# =============================================================================
+
+# Files modified within this many days get [recent] badge
+GIT_BADGE_RECENT_DAYS = 7
+
+# Files with this many commits or more get [high-churn] badge
+GIT_BADGE_CHURN_COMMITS = 10
+
+# =============================================================================
+# Phase Classification Thresholds (crystal/rotting/emergent/evolving)
+# =============================================================================
+
+# Crystal: old stable code that rarely changes
+PHASE_CRYSTAL_MIN_AGE_DAYS = 180      # Must exist for 6+ months
+PHASE_CRYSTAL_MIN_QUIET_DAYS = 30     # No changes in last month
+
+# Rotting: old code that keeps getting touched (maintenance burden)
+PHASE_ROTTING_MIN_AGE_DAYS = 90       # Must exist for 3+ months
+PHASE_ROTTING_MAX_QUIET_DAYS = 14     # Changed within last 2 weeks
+PHASE_ROTTING_CHURN_MULTIPLIER = 1.5  # Churn > 1.5x median
+
+# Emergent: new code still taking shape
+PHASE_EMERGENT_MAX_AGE_DAYS = 30      # Less than 1 month old

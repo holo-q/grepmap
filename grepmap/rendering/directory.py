@@ -64,7 +64,9 @@ class DirectoryRenderer:
         overflow_tags: Optional[List[RankedTag]] = None,
         adaptive: bool = False,
         bridge_files: Optional[Set[str]] = None,
-        api_symbols: Optional[Set[tuple]] = None
+        api_symbols: Optional[Set[tuple]] = None,
+        git_badges: Optional[Dict[str, List[str]]] = None,
+        file_phases: Optional[Dict[str, str]] = None
     ) -> str:
         """Render ranked tags as hierarchical directory overview.
 
@@ -80,13 +82,20 @@ class DirectoryRenderer:
                          (high betweenness centrality). Annotated with [bridge]
             api_symbols: Set of (rel_fname, symbol_name) tuples classified as
                         public API surface. Annotated with [api]
+            git_badges: Dict mapping rel_fname to list of badge strings
+                       (e.g., ["recent", "high-churn"]). Surfaced for temporal context.
+            file_phases: Dict mapping rel_fname to lifecycle phase string
+                        ("crystal", "rotting", "emergent", "evolving").
+                        Computed from git history heuristics.
 
         Returns:
             Formatted directory overview with hierarchical symbol structure
         """
-        # Default to empty sets if not provided
+        # Default to empty sets/dicts if not provided
         bridge_files = bridge_files or set()
         api_symbols = api_symbols or set()
+        git_badges = git_badges or {}
+        file_phases = file_phases or {}
         if not tags:
             return ""
 
@@ -164,11 +173,28 @@ class DirectoryRenderer:
                 elif tag.node_type in ('constant', 'variable'):
                     constants.append(tag)
 
-            # File header with optional bridge annotation
+            # File header with annotations: [bridge] [phase] [recent] [high-churn]
             text = Text()
             text.append(f"{rel_fname}:", style="bold blue")
             if rel_fname in bridge_files:
                 text.append(" [bridge]", style="dim yellow")
+            # Phase annotation with color coding
+            if rel_fname in file_phases:
+                phase = file_phases[rel_fname]
+                phase_colors = {
+                    "crystal": "cyan",
+                    "rotting": "red",
+                    "emergent": "green",
+                    "evolving": "dim white"
+                }
+                text.append(f" [{phase}]", style=phase_colors.get(phase, "dim"))
+            # Git badges for temporal context
+            for badge in git_badges.get(rel_fname, []):
+                badge_colors = {
+                    "recent": "bright_green",
+                    "high-churn": "bright_yellow"
+                }
+                text.append(f" [{badge}]", style=badge_colors.get(badge, "dim"))
             console.print(text, no_wrap=True)
 
             # Render classes with their fields and methods

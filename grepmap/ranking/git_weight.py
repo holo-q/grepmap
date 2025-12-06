@@ -24,7 +24,15 @@ from grepmap.core.config import (
     GIT_RECENCY_MAX_BOOST,
     GIT_CHURN_THRESHOLD,
     GIT_CHURN_MAX_BOOST,
-    GIT_AUTHOR_BOOST
+    GIT_AUTHOR_BOOST,
+    GIT_BADGE_RECENT_DAYS,
+    GIT_BADGE_CHURN_COMMITS,
+    PHASE_CRYSTAL_MIN_AGE_DAYS,
+    PHASE_CRYSTAL_MIN_QUIET_DAYS,
+    PHASE_ROTTING_MIN_AGE_DAYS,
+    PHASE_ROTTING_MAX_QUIET_DAYS,
+    PHASE_ROTTING_CHURN_MULTIPLIER,
+    PHASE_EMERGENT_MAX_AGE_DAYS
 )
 
 
@@ -309,3 +317,118 @@ class GitWeightCalculator:
             self.output_handler("Top git-boosted files:")
             for fname, weight in top_boosted:
                 self.output_handler(f"  {fname}: {weight:.2f}x")
+
+    def compute_badges(self, rel_fnames: List[str]) -> Dict[str, List[str]]:
+        """Compute display badges for files based on git stats.
+
+        Badges are for visual annotation only, not ranking. They surface
+        temporal signals to help orient the reader:
+        - [recent]: Modified within GIT_BADGE_RECENT_DAYS
+        - [high-churn]: 10+ commits touching this file
+
+        Args:
+            rel_fnames: List of relative file paths
+
+        Returns:
+            Dict mapping rel_fname to list of badge strings
+        """
+        if not self._is_git_repo():
+            return {}
+
+        # Ensure git stats are fetched
+        if not self._file_stats:
+            self._fetch_git_stats(rel_fnames)
+
+        now = datetime.now(timezone.utc)
+        badges: Dict[str, List[str]] = {}
+
+        for rel_fname in rel_fnames:
+            stats = self._file_stats.get(rel_fname)
+            if not stats:
+                continue
+
+            file_badges: List[str] = []
+
+            # Recent badge
+            if stats.get('last_modified'):
+                age_days = (now - stats['last_modified']).days
+                if age_days <= GIT_BADGE_RECENT_DAYS:
+                    file_badges.append("recent")
+
+            # High-churn badge
+            if stats.get('commit_count', 0) >= GIT_BADGE_CHURN_COMMITS:
+                file_badges.append("high-churn")
+
+            if file_badges:
+                badges[rel_fname] = file_badges
+
+        return badges
+
+    def classify_phases(self, rel_fnames: List[str]) -> Dict[str, str]:
+        """Classify files into lifecycle phases based on git history.
+
+        Phases provide a "phase portrait" of code stability:
+        - crystal: Old, stable code (age > 180d, quiet > 30d, low churn)
+        - rotting: Old but churning code (age > 90d, recent changes, high churn)
+        - emergent: New code (age < 30d)
+        - evolving: Everything else (normal development)
+
+        All classification is purely heuristic from git stats - no learning.
+
+        Args:
+            rel_fnames: List of relative file paths
+
+        Returns:
+            Dict mapping rel_fname to phase string
+        """
+        if not self._is_git_repo():
+            return {}
+
+        # Ensure git stats are fetched
+        if not self._file_stats:
+            self._fetch_git_stats(rel_fnames)
+
+        now = datetime.now(timezone.utc)
+        phases: Dict[str, str] = {}
+
+        # Compute median churn for rotting detection
+        churn_values = [
+            s.get('commit_count', 0)
+            for s in self._file_stats.values()
+            if s.get('commit_count', 0) > 0
+        ]
+        median_churn = sorted(churn_values)[len(churn_values) // 2] if churn_values else 5
+
+        for rel_fname in rel_fnames:
+            stats = self._file_stats.get(rel_fname)
+            if not stats:
+                continue
+
+            # Compute age metrics
+            first_seen = stats.get('first_seen') or stats.get('last_modified')
+            last_modified = stats.get('last_modified')
+            commit_count = stats.get('commit_count', 0)
+
+            if not first_seen or not last_modified:
+                continue
+
+            age_days = (now - first_seen).days
+            quiet_days = (now - last_modified).days
+
+            # Classification hierarchy (most specific first)
+            if age_days >= PHASE_CRYSTAL_MIN_AGE_DAYS and quiet_days >= PHASE_CRYSTAL_MIN_QUIET_DAYS:
+                # Old and stable
+                phases[rel_fname] = "crystal"
+            elif (age_days >= PHASE_ROTTING_MIN_AGE_DAYS and
+                  quiet_days <= PHASE_ROTTING_MAX_QUIET_DAYS and
+                  commit_count > median_churn * PHASE_ROTTING_CHURN_MULTIPLIER):
+                # Old but churning - maintenance burden
+                phases[rel_fname] = "rotting"
+            elif age_days <= PHASE_EMERGENT_MAX_AGE_DAYS:
+                # New code
+                phases[rel_fname] = "emergent"
+            else:
+                # Normal development
+                phases[rel_fname] = "evolving"
+
+        return phases
