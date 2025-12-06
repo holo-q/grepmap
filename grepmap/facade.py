@@ -534,6 +534,21 @@ class GrepMap:
             temporal_mates = self.temporal_coupling.compute_coupling(rel_fnames)
         self._last_temporal_mates = temporal_mates  # Store for diagnostics
 
+        # Step 4c: Classify intent and modulate weights by recipe
+        # Intent affects how strongly we weight recency vs churn
+        intent = self.intent_classifier.classify(focus_targets)
+        recipe = self.intent_classifier.get_recipe(intent)
+        self._last_intent = intent  # Store for diagnostics
+
+        # Apply recipe to git_weights: scale recency effect
+        # Higher recency_weight = favor recently changed files more
+        if git_weights and recipe.recency_weight != 1.0:
+            # Scale the boost portion: weight = 1 + (boost - 1) * recipe_factor
+            git_weights = {
+                f: 1.0 + (w - 1.0) * recipe.recency_weight
+                for f, w in git_weights.items()
+            }
+
         # Step 5: Apply boosts and create ranked tags
         # Pass symbol_ranks for per-symbol ranking, git_weights for temporal boost,
         # and temporal_mates for co-change boost
