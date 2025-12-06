@@ -21,7 +21,7 @@ from typing import List, Dict, Set, Optional, Callable, Tuple
 from grepmap.core.types import Tag, RankedTag
 from grepmap.core.config import (
     BOOST_MENTIONED_IDENT, BOOST_MENTIONED_FILE, BOOST_CHAT_FILE,
-    EXCLUDE_UNRANKED_THRESHOLD
+    BOOST_TEMPORAL_COUPLING, EXCLUDE_UNRANKED_THRESHOLD
 )
 
 
@@ -62,7 +62,8 @@ class BoostCalculator:
         mentioned_fnames: Optional[Set[str]] = None,
         mentioned_idents: Optional[Set[str]] = None,
         symbol_ranks: Optional[Dict[Tuple[str, str], float]] = None,
-        git_weights: Optional[Dict[str, float]] = None
+        git_weights: Optional[Dict[str, float]] = None,
+        temporal_mates: Optional[Dict[str, List[Tuple[str, float]]]] = None
     ) -> List[RankedTag]:
         """Apply boosts to PageRank scores and create RankedTag list.
 
@@ -85,6 +86,9 @@ class BoostCalculator:
                          ranks instead of file-level for fine-grained selection.
             git_weights: Optional dict mapping rel_fname to git-based boost factor.
                         Applied multiplicatively to favor recent/churning files.
+            temporal_mates: Optional dict mapping rel_fname to list of
+                           (change_mate_fname, coupling_score) tuples.
+                           Files that change together with chat files get boosted.
 
         Returns:
             List of RankedTag objects sorted by rank descending
@@ -96,6 +100,15 @@ class BoostCalculator:
 
         # Convert chat files to relative paths for comparison
         chat_rel_fnames = set(self.get_rel_fname(f) for f in chat_fnames)
+
+        # Build set of files temporally coupled to chat files
+        temporal_boost_files: Set[str] = set()
+        if temporal_mates and chat_rel_fnames:
+            for chat_file in chat_rel_fnames:
+                mates = temporal_mates.get(chat_file, [])
+                for mate_fname, _score in mates:
+                    if mate_fname not in chat_rel_fnames:  # Don't double-boost
+                        temporal_boost_files.add(mate_fname)
 
         ranked_tags = []
 
@@ -128,7 +141,8 @@ class BoostCalculator:
                         rel_fname,
                         chat_rel_fnames,
                         mentioned_fnames,
-                        mentioned_idents
+                        mentioned_idents,
+                        temporal_boost_files
                     )
 
                     # Apply git weight (recency/churn/authorship)
@@ -146,7 +160,8 @@ class BoostCalculator:
         rel_fname: str,
         chat_rel_fnames: Set[str],
         mentioned_fnames: Set[str],
-        mentioned_idents: Set[str]
+        mentioned_idents: Set[str],
+        temporal_boost_files: Set[str]
     ) -> float:
         """Calculate multiplicative boost for a single tag.
 
@@ -156,6 +171,7 @@ class BoostCalculator:
         2. If identifier is mentioned: multiply by BOOST_MENTIONED_IDENT
         3. If file is mentioned: multiply by BOOST_MENTIONED_FILE
         4. If file is in chat: multiply by BOOST_CHAT_FILE
+        5. If file is temporally coupled to chat: multiply by BOOST_TEMPORAL_COUPLING
 
         Example: A mentioned identifier in a chat file gets
                  1.0 * BOOST_MENTIONED_IDENT * BOOST_CHAT_FILE
@@ -166,6 +182,7 @@ class BoostCalculator:
             chat_rel_fnames: Set of chat file relative paths
             mentioned_fnames: Set of mentioned file relative paths
             mentioned_idents: Set of mentioned identifier names
+            temporal_boost_files: Set of files temporally coupled to chat files
 
         Returns:
             Multiplicative boost factor
@@ -183,5 +200,10 @@ class BoostCalculator:
         # Boost for chat files (strongest file-level signal)
         if rel_fname in chat_rel_fnames:
             boost *= BOOST_CHAT_FILE
+
+        # Boost for files that change together with chat files
+        # Surfaces related files without explicit mention
+        if rel_fname in temporal_boost_files:
+            boost *= BOOST_TEMPORAL_COUPLING
 
         return boost

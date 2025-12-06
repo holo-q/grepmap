@@ -525,8 +525,17 @@ class GrepMap:
             )
         self._last_git_weights = git_weights  # Store for diagnostics
 
+        # Step 4b: Compute temporal coupling (files that change together)
+        # Only compute if we have focus files to find change-mates for
+        temporal_mates = None
+        if focus_files:
+            rel_fnames = [self.get_rel_fname(f) for f in included]
+            temporal_mates = self.temporal_coupling.compute_coupling(rel_fnames)
+        self._last_temporal_mates = temporal_mates  # Store for diagnostics
+
         # Step 5: Apply boosts and create ranked tags
-        # Pass symbol_ranks for per-symbol ranking and git_weights for temporal boost
+        # Pass symbol_ranks for per-symbol ranking, git_weights for temporal boost,
+        # and temporal_mates for co-change boost
         ranked_tags = self.boost_calculator.apply_boosts(
             included_files=included,
             tags_by_file=tags_by_file,
@@ -535,7 +544,8 @@ class GrepMap:
             mentioned_fnames=mentioned_fnames,
             mentioned_idents=combined_mentioned_idents,
             symbol_ranks=symbol_ranks,
-            git_weights=git_weights
+            git_weights=git_weights,
+            temporal_mates=temporal_mates
         )
 
         # Sort by rank (descending)

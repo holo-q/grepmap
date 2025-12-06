@@ -78,6 +78,11 @@ BOOST_CHAT_FILE = 20.0
 # Tags below this are likely disconnected graph nodes with no real importance.
 EXCLUDE_UNRANKED_THRESHOLD = 0.0001
 
+# Boost for files that frequently change together with chat files.
+# Applied to "change-mates" detected by temporal coupling analysis.
+# Weaker than direct chat boost but surfaces related files automatically.
+BOOST_TEMPORAL_COUPLING = 3.0
+
 
 # =============================================================================
 # Token Budget and Rendering Parameters
